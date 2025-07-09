@@ -8,8 +8,10 @@ use axum::{
     routing::get,
     Router,
 };
+use dotenv::dotenv;
 use keycast_core::database::Database;
 use keycast_core::encryption::file_key_manager::FileKeyManager;
+use keycast_core::encryption::gcp_key_manager::GcpKeyManager;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +24,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n\n================================================");
     println!("🔑 Keycast API Starting...");
+
+    // Load environment variables
+    dotenv().ok();
 
     // Initialize tracing with debug level
     tracing_subscriber::registry()
@@ -64,14 +69,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = Database::new(database_url.clone(), database_migrations.clone()).await?;
     println!("✔︎ Database initialized");
 
-    // Setup basic file based key manager for encryption
-    let key_manager = FileKeyManager::new().expect("Failed to create key manager");
-    println!("✔︎ Encryption key loaded");
+    // Setup key manager based on environment
+    let key_manager: Box<dyn keycast_core::encryption::KeyManager> =
+        if env::var("USE_GCP_KMS").unwrap_or_else(|_| "false".to_string()) == "true" {
+            println!("🔑 Using Google Cloud KMS for encryption");
+            Box::new(
+                GcpKeyManager::new()
+                    .await
+                    .expect("Failed to create GCP key manager"),
+            )
+        } else {
+            println!("🔑 Using file-based encryption");
+            Box::new(FileKeyManager::new().expect("Failed to create file key manager"))
+        };
+    println!("✔︎ Encryption key manager initialized");
 
     // Create a shared state with the database and key manager
     let state = Arc::new(KeycastState {
         db: database.pool,
-        key_manager: Box::new(key_manager),
+        key_manager,
     });
 
     // Set the shared state in the once cell

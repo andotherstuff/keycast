@@ -1,5 +1,6 @@
 pub mod aws_key_manager;
 pub mod file_key_manager;
+pub mod gcp_key_manager;
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -14,6 +15,12 @@ pub enum KeyManagerError {
     Decrypt(String),
     #[error("Failed to generate master key")]
     GenerateMasterKey(String),
+    #[error("Configuration error: {0}")]
+    ConfigurationError(String),
+    #[error("Encryption error: {0}")]
+    EncryptionError(String),
+    #[error("Decryption error: {0}")]
+    DecryptionError(String),
 }
 
 #[async_trait]

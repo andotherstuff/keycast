@@ -624,6 +624,20 @@ mod tests {
         .await
         .unwrap();
 
+        // Create users table (required by validate_policy)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                public_key CHAR(64) PRIMARY KEY,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let auth = create_test_authorization(&pool, None, None).await;
         let keys = Keys::generate();
         let pubkey = keys.public_key();

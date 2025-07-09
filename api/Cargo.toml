@@ -12,6 +12,7 @@ axum = "0.7"
 base64 = { workspace = true }
 chrono = { workspace = true }
 config = { workspace = true }
+dotenv = { workspace = true }
 keycast_core = { path = "../core" }
 nostr = {workspace = true}
 nostr-sdk = {workspace = true}

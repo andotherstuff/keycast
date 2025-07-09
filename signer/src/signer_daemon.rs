@@ -1,5 +1,6 @@
 use dotenv::dotenv;
 use keycast_core::encryption::file_key_manager::FileKeyManager;
+use keycast_core::encryption::gcp_key_manager::GcpKeyManager;
 use keycast_core::encryption::KeyManager;
 use keycast_core::traits::AuthorizationValidations;
 use keycast_core::types::authorization::Authorization;
@@ -39,8 +40,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
     };
 
-    // Decrypt the bunker secret
-    let key_manager = FileKeyManager::new()?;
+    // Setup key manager based on environment
+    let key_manager: Box<dyn KeyManager> =
+        if env::var("USE_GCP_KMS").unwrap_or_else(|_| "false".to_string()) == "true" {
+            tracing::info!("Using Google Cloud KMS for encryption");
+            Box::new(
+                GcpKeyManager::new()
+                    .await
+                    .map_err(|e| format!("Failed to create GCP key manager: {}", e))?,
+            )
+        } else {
+            tracing::info!("Using file-based encryption");
+            Box::new(FileKeyManager::new()?)
+        };
     let decrypted_secret_bytes = key_manager
         .decrypt(&signer_daemon.authorization.bunker_secret)
         .await?;
