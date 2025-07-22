@@ -4,8 +4,8 @@ WORKDIR /app
 COPY ./api ./api
 COPY ./signer ./signer
 COPY ./core ./core
-COPY ./Cargo.* .
-COPY ./Cargo.lock .
+COPY ./Cargo.toml ./Cargo.toml
+COPY ./Cargo.lock ./Cargo.lock
 RUN cargo build --release
 
 # Build stage for Bun frontend
@@ -36,15 +36,10 @@ ENV LC_ALL=C.UTF-8
 WORKDIR /app
 COPY ./web .
 COPY ./scripts ./scripts
-COPY master.key .
 
 # Install dependencies and build
-RUN bun install
-
-# Install ARM64-specific dependencies only on ARM64 architecture
-RUN if [ "$(uname -m)" = "aarch64" ]; then \
-    bun add -d @rollup/rollup-linux-arm64-gnu; \
-    fi
+# Use --ignore-scripts to skip problematic install scripts
+RUN bun install --ignore-scripts
 
 # Check and Build
 RUN bun run check
@@ -77,7 +72,7 @@ RUN mkdir -p /app/database
 COPY --from=rust-builder /app/target/release/keycast_api ./
 COPY --from=rust-builder /app/target/release/keycast_signer ./
 COPY --from=rust-builder /app/target/release/signer_daemon ./
-COPY --from=web-builder /app/master.key ./
+# Master key will be provided at runtime via volume mount or secrets
 COPY --from=web-builder /app/build ./web
 COPY --from=web-builder /app/package.json ./
 COPY --from=web-builder /app/node_modules ./node_modules
