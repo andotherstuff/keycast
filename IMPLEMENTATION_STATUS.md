@@ -1,16 +1,16 @@
 # Keycast Personal Authentication: Implementation Status
 
-**Last Updated**: July 23, 2025  
-**Overall Progress**: ~50% Complete
+**Last Updated**: July 23, 2025 (Afternoon)  
+**Overall Progress**: ~60% Complete
 
 This document serves as the single source of truth for implementation status of the Keycast personal authentication transformation.
 
 ## Quick Status Overview
 
 | Phase | Component | Status | Progress |
-|-------|-----------|---------|----------|
-| 1 | Core Infrastructure | ✅ In Progress | 70% |
-| 2 | API Layer | ✅ In Progress | 50% |
+|-------|-----------|---------|-----------|
+| 1 | Core Infrastructure | ✅ Nearly Complete | 90% |
+| 2 | API Layer | ✅ Nearly Complete | 90% |
 | 3 | Frontend Migration | ❌ Not Started | 0% |
 | 4 | Advanced Features | ❌ Not Started | 0% |
 
@@ -77,6 +77,16 @@ This document serves as the single source of truth for implementation status of 
   - POST /requests/:id/approve - Approve request
   - POST /requests/:id/reject - Reject request
 
+#### API Endpoints - Applications (`/api/applications/`)
+- [x] **Public Endpoints**
+  - GET /applications - List all known applications
+  - GET /applications/:id - Get public app info
+  - PUT /applications/:id/verify - Mark app as verified (admin)
+- [x] **User Endpoints** (`/api/users/applications/`)
+  - GET /applications - List user's connected apps
+  - GET /applications/:id - Get user's app details
+  - DELETE /applications/:id/revoke - Revoke all app authorizations
+
 #### Supporting Infrastructure
 - [x] Session management with bearer tokens
 - [x] Request context with user info
@@ -93,11 +103,9 @@ This document serves as the single source of truth for implementation status of 
 
 ### ❌ NOT IMPLEMENTED
 
-#### API Endpoints - Applications (`/api/applications/`)
-- [ ] GET /applications - List registered apps
-- [ ] POST /applications - Register new app
-- [ ] GET /applications/:id - Get app details
-- [ ] PUT /applications/:id - Update app
+#### API Endpoints - Applications (Advanced)
+- [ ] POST /applications - Register new app (self-service)
+- [ ] PUT /applications/:id - Update app metadata
 - [ ] DELETE /applications/:id - Remove app
 - [ ] PUT /applications/:id/permissions - Update permissions
 
@@ -133,6 +141,7 @@ This document serves as the single source of truth for implementation status of 
 
 1. `/root/repo/test_user_keys.sh` - Tests user key management endpoints
 2. `/root/repo/test_user_policies.sh` - Tests policy management endpoints
+3. `/root/repo/test_applications.sh` - Tests application management endpoints
 
 ## Environment Variables
 

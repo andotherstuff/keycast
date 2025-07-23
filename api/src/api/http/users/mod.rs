@@ -8,11 +8,13 @@ pub mod authorization_requests;
 pub mod profile;
 
 use axum::Router;
+use crate::api::http::applications;
 
 pub fn routes() -> Router {
     Router::new()
         .nest("/keys", keys::routes())
         .nest("/policies", policies::routes())
         .nest("/authorizations", authorizations::routes())
+        .nest("/applications", applications::user_app_routes())
         .merge(profile::routes())
 }

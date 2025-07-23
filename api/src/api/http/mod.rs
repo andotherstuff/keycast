@@ -1,3 +1,4 @@
+pub mod applications;
 pub mod auth;
 pub mod nip05;
 pub mod routes;
