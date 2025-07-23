@@ -140,15 +140,26 @@ impl AuthorizationFlowService {
         attempt_id: &str,
     ) -> Result<String, AuthorizationFlowError> {
         // Get the connection attempt
-        let row = sqlx::query!(
+        #[derive(sqlx::FromRow)]
+        struct AttemptRow {
+            id: String,
+            app_domain: String,
+            app_pubkey: Option<String>,
+            user_nip05: Option<String>,
+            connection_metadata: Option<String>,
+            attempted_at: chrono::NaiveDateTime,
+            processed: bool,
+        }
+        
+        let row = sqlx::query_as::<_, AttemptRow>(
             r#"
             SELECT id, app_domain, app_pubkey, user_nip05, 
                    connection_metadata, attempted_at, processed
             FROM app_connection_attempts
             WHERE id = ?1
             "#,
-            attempt_id
         )
+        .bind(attempt_id)
         .fetch_one(&self.pool)
         .await?;
         
@@ -253,7 +264,7 @@ impl AuthorizationFlowService {
         
         let mut result = Vec::new();
         for row in requests {
-            let permissions: Vec<String> = if let Some(ref perms) = row.requested_permissions {
+            let permissions: Vec<String> = if let Some(perms) = row.requested_permissions.as_deref() {
                 serde_json::from_str(perms)?
             } else {
                 Vec::new()
@@ -456,7 +467,7 @@ impl AuthorizationFlowService {
         .await?
         .ok_or(AuthorizationFlowError::RequestNotFound)?;
         
-        let permissions: Vec<String> = if let Some(ref perms) = row.requested_permissions {
+        let permissions: Vec<String> = if let Some(perms) = row.requested_permissions.as_deref() {
             serde_json::from_str(perms)?
         } else {
             Vec::new()

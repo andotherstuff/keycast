@@ -357,6 +357,38 @@ async fn get_user_from_session(
         .ok_or_else(|| ApiError::not_found("User not found"))
 }
 
+/// Extract user from session token in Authorization header
+pub async fn get_user_from_session(
+    pool: &SqlitePool,
+    headers: axum::http::HeaderMap,
+) -> Result<UserEnhanced, ApiError> {
+    // Get session token
+    let session_token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::auth("Missing or invalid authorization header"))?;
+    
+    // Get user from session
+    let user_id = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT user_id FROM user_sessions 
+        WHERE token = ?1 AND expires_at > CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(session_token)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::auth("Invalid or expired session"))?;
+    
+    let user = UserEnhanced::find_by_id(pool, &user_id)
+        .await
+        .map_err(|_| ApiError::internal("Database error"))?
+        .ok_or_else(|| ApiError::not_found("User not found"))?;
+    
+    Ok(user)
+}
+
 /// Log user activity
 async fn log_activity(
     pool: &SqlitePool,

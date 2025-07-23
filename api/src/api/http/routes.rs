@@ -6,7 +6,7 @@ use axum::{
 };
 use sqlx::SqlitePool;
 
-use crate::api::http::{auth, nip05, teams};
+use crate::api::http::{auth, nip05, teams, users};
 
 pub fn routes(pool: SqlitePool) -> Router {
     tracing::debug!("Building routes");
@@ -49,9 +49,15 @@ pub fn routes(pool: SqlitePool) -> Router {
     // NIP-05 routes (includes both public and protected endpoints)
     let nip05_routes = nip05::routes(pool.clone());
     
+    // User routes (protected by session auth)
+    let user_routes = Router::new()
+        .nest("/users", users::routes())
+        .with_state(pool.clone());
+    
     // Combine routes
     Router::new()
         .merge(auth_routes)
         .merge(protected_routes)
         .merge(nip05_routes)
+        .merge(user_routes)
 }

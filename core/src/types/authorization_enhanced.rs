@@ -3,7 +3,7 @@
 
 use crate::encryption::KeyManagerError;
 use crate::traits::AuthorizationValidations;
-use crate::traits::CustomPermission;
+use crate::types::authorization::AuthorizationError;
 use crate::types::permission::Permission;
 use crate::types::policy::Policy;
 use crate::types::stored_key::StoredKey;
@@ -80,20 +80,19 @@ pub struct AuthorizationEnhanced {
 impl AuthorizationEnhanced {
     /// Find an authorization by ID
     pub async fn find(pool: &SqlitePool, id: u32) -> Result<Self, AuthorizationEnhancedError> {
-        let auth = sqlx::query_as!(
-            AuthorizationEnhanced,
+        let auth = sqlx::query_as::<_, AuthorizationEnhanced>(
             r#"
             SELECT 
-                id as "id: u32",
-                stored_key_id as "stored_key_id?: u32",
+                id,
+                stored_key_id,
                 user_id,
                 user_key_id,
-                application_id as "application_id?: u32",
+                application_id,
                 secret,
                 bunker_public_key,
                 bunker_secret,
                 relays,
-                policy_id as "policy_id: u32",
+                policy_id,
                 max_uses,
                 expires_at,
                 status,
@@ -104,8 +103,8 @@ impl AuthorizationEnhanced {
             FROM authorizations
             WHERE id = ?
             "#,
-            id
         )
+        .bind(id)
         .fetch_one(pool)
         .await?;
         
@@ -136,8 +135,13 @@ impl AuthorizationEnhanced {
         } else if self.is_legacy() {
             // Legacy team-based model
             if let Some(stored_key_id) = self.stored_key_id {
-                let stored_key = StoredKey::find(pool, stored_key_id).await
-                    .map_err(|_| AuthorizationEnhancedError::NoKeyFound)?;
+                let stored_key = sqlx::query_as::<_, StoredKey>(
+                    "SELECT * FROM stored_keys WHERE id = ?"
+                )
+                .bind(stored_key_id)
+                .fetch_one(pool)
+                .await
+                .map_err(|_| AuthorizationEnhancedError::NoKeyFound)?;
                 Ok(stored_key.secret_key)
             } else {
                 Err(AuthorizationEnhancedError::NoKeyFound)
@@ -149,12 +153,17 @@ impl AuthorizationEnhanced {
 
     /// Get the policy for this authorization
     pub async fn policy(&self, pool: &SqlitePool) -> Result<Policy, AuthorizationEnhancedError> {
-        let policy = Policy::find(pool, self.policy_id).await?;
+        let policy = sqlx::query_as::<_, Policy>(
+            "SELECT * FROM policies WHERE id = ?"
+        )
+        .bind(self.policy_id)
+        .fetch_one(pool)
+        .await?;
         Ok(policy)
     }
 
     /// Get the number of redemptions used for this authorization
-    pub fn redemptions_count_sync(&self, pool: &SqlitePool) -> Result<u16, AuthorizationEnhancedError> {
+    pub fn redemptions_count_sync(&self, pool: &SqlitePool) -> Result<u16, AuthorizationError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let count = sqlx::query_scalar::<_, i64>(
@@ -173,7 +182,7 @@ impl AuthorizationEnhanced {
     pub fn redemptions_pubkeys_sync(
         &self,
         pool: &SqlitePool,
-    ) -> Result<Vec<PublicKey>, AuthorizationEnhancedError> {
+    ) -> Result<Vec<PublicKey>, AuthorizationError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let pubkeys = sqlx::query_scalar::<_, String>(
@@ -196,7 +205,7 @@ impl AuthorizationEnhanced {
         &self,
         pool: &SqlitePool,
         pubkey: &PublicKey,
-    ) -> Result<(), AuthorizationEnhancedError> {
+    ) -> Result<(), AuthorizationError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 sqlx::query(
@@ -220,10 +229,9 @@ impl AuthorizationEnhanced {
     }
 
     /// Generate the bunker URL for this authorization
-    pub fn bunker_url(&self, domain: Option<&str>) -> String {
+    pub fn bunker_url(&self, _domain: Option<&str>) -> String {
         let relays = self.get_relays();
         let relay_param = relays.join(",");
-        let domain_str = domain.unwrap_or("keycast.app");
         
         format!(
             "bunker://{}?relay={}&secret={}",
@@ -235,18 +243,16 @@ impl AuthorizationEnhanced {
 }
 
 impl AuthorizationValidations for AuthorizationEnhanced {
-    type Error = AuthorizationEnhancedError;
-
     fn validate_policy(
         &self,
         pool: &SqlitePool,
         pubkey: &PublicKey,
         request: &Request,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<bool, AuthorizationError> {
         // Check if authorization is expired
         if let Some(expires_at) = &self.expires_at {
             if chrono::Utc::now() > *expires_at {
-                return Err(AuthorizationEnhancedError::Expired);
+                return Err(AuthorizationError::Expired);
             }
         }
 
@@ -254,15 +260,16 @@ impl AuthorizationValidations for AuthorizationEnhanced {
         if let Some(max_uses) = self.max_uses {
             let redemptions = self.redemptions_count_sync(pool)?;
             if redemptions >= max_uses as u16 {
-                return Err(AuthorizationEnhancedError::FullyRedeemed);
+                return Err(AuthorizationError::FullyRedeemed);
             }
         }
 
         // Handle Connect requests
         if let Request::Connect { secret, .. } = request {
             // Validate secret
-            if secret != &self.secret {
-                return Err(AuthorizationEnhancedError::InvalidSecret);
+            match secret {
+                Some(s) if s != &self.secret => return Err(AuthorizationError::InvalidSecret),
+                _ => {}
             }
 
             // Check if this pubkey has already redeemed
@@ -275,26 +282,62 @@ impl AuthorizationValidations for AuthorizationEnhanced {
         }
 
         // For other requests, validate against policy permissions
-        let policy = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.policy(pool).await
-            })
-        })?;
-
         let permissions = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                Permission::for_policy(pool, policy.id).await
+                sqlx::query_as::<_, Permission>(
+                    r#"
+                    SELECT p.* FROM permissions p
+                    JOIN policy_permissions pp ON p.id = pp.permission_id
+                    WHERE pp.policy_id = ?
+                    "#,
+                )
+                .bind(self.policy_id)
+                .fetch_all(pool)
+                .await
             })
         })
-        .map_err(|e| AuthorizationEnhancedError::Database(e))?;
+        .map_err(|e| AuthorizationError::Database(e))?;
 
-        // Check permissions
-        for permission in permissions {
-            if permission.validate_request(request) {
-                return Ok(true);
+        // Convert to custom permissions
+        let custom_permissions: Result<Vec<Box<dyn crate::traits::CustomPermission>>, _> = permissions
+            .iter()
+            .map(|p| p.to_custom_permission())
+            .collect();
+        let custom_permissions = custom_permissions.map_err(|_| AuthorizationError::Unauthorized)?;
+
+        // Validate based on request type
+        match request {
+            Request::GetPublicKey => {
+                // Check that the pubkey has connected to this authorization
+                Ok(self.redemptions_pubkeys_sync(pool)?.contains(pubkey))
             }
+            Request::SignEvent(event) => {
+                for permission in &custom_permissions {
+                    if !permission.can_sign(event) {
+                        return Err(AuthorizationError::Unauthorized);
+                    }
+                }
+                Ok(true)
+            }
+            Request::GetRelays => Ok(true),
+            Request::Nip04Encrypt { public_key, text } | Request::Nip44Encrypt { public_key, text } => {
+                for permission in &custom_permissions {
+                    if !permission.can_encrypt(text, pubkey, public_key) {
+                        return Err(AuthorizationError::Unauthorized);
+                    }
+                }
+                Ok(true)
+            }
+            Request::Nip04Decrypt { public_key, ciphertext } | Request::Nip44Decrypt { public_key, ciphertext } => {
+                for permission in &custom_permissions {
+                    if !permission.can_decrypt(ciphertext, public_key, pubkey) {
+                        return Err(AuthorizationError::Unauthorized);
+                    }
+                }
+                Ok(true)
+            }
+            Request::Ping => Ok(true),
+            _ => Err(AuthorizationError::Unauthorized),
         }
-
-        Err(AuthorizationEnhancedError::Unauthorized)
     }
 }
