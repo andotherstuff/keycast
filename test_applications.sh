@@ -2,7 +2,7 @@
 
 # Test script for application management endpoints
 
-API_BASE="http://localhost:8080/api"
+API_BASE="http://localhost:3000/api"
 
 # Colors for output
 GREEN='\033[0;32m'
