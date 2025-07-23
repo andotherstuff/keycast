@@ -15,31 +15,31 @@
 - ⚠️ `GET /api/auth/oauth/:provider` - OAuth init (returns "Not implemented")
 - ⚠️ `GET /api/auth/oauth/:provider/callback` - OAuth callback (returns "Not implemented")
 
-## User Management Endpoints (ALL MISSING)
-- ❌ `GET /api/users/profile` - Get full user profile with auth methods
-- ❌ `PUT /api/users/profile` - Update profile (name, NIP-05, picture)
+## User Management Endpoints
+- ✅ `GET /api/users/profile` - Get full user profile with auth methods
+- ✅ `PUT /api/users/profile` - Update profile (name, NIP-05, picture)
 - ❌ `DELETE /api/users/account` - Delete user account and all data
 - ❌ `GET /api/users/auth-methods` - List all auth methods
 - ❌ `POST /api/users/auth-methods` - Add new auth method
 - ❌ `DELETE /api/users/auth-methods/:id` - Remove auth method
 
-## Key Management Endpoints (ALL MISSING)
-- ❌ `GET /api/users/keys` - List user's keys
-- ❌ `POST /api/users/keys` - Create new key
-- ❌ `GET /api/users/keys/:id` - Get key details
-- ❌ `PUT /api/users/keys/:id` - Update key (name, status)
-- ❌ `DELETE /api/users/keys/:id` - Delete key
-- ❌ `POST /api/users/keys/:id/rotate` - Rotate key
-- ❌ `POST /api/users/keys/:id/set-primary` - Set as primary key
+## Key Management Endpoints (IMPLEMENTED)
+- ✅ `GET /api/users/keys` - List user's keys
+- ✅ `POST /api/users/keys` - Create new key
+- ✅ `GET /api/users/keys/:id` - Get key details
+- ✅ `PUT /api/users/keys/:id` - Update key (name, status)
+- ✅ `DELETE /api/users/keys/:id` - Delete key
+- ✅ `POST /api/users/keys/:id/rotate` - Rotate key
+- ✅ `PUT /api/users/keys/:id/primary` - Set as primary key (Note: PUT not POST)
 - ❌ `POST /api/users/keys/import` - Import existing key
 
-## Policy Management Endpoints (ALL MISSING)
-- ❌ `GET /api/users/policies` - List user's policies
-- ❌ `POST /api/users/policies` - Create new policy
-- ❌ `GET /api/users/policies/:id` - Get policy with permissions
-- ❌ `PUT /api/users/policies/:id` - Update policy
-- ❌ `DELETE /api/users/policies/:id` - Delete policy
-- ❌ `GET /api/users/policies/templates` - Get policy templates
+## Policy Management Endpoints (MOSTLY IMPLEMENTED)
+- ✅ `GET /api/users/policies` - List user's policies
+- ✅ `POST /api/users/policies` - Create new policy
+- ✅ `GET /api/users/policies/:id` - Get policy with permissions
+- ✅ `PUT /api/users/policies/:id` - Update policy
+- ✅ `DELETE /api/users/policies/:id` - Delete policy
+- ✅ `GET /api/users/policies/templates` - Get policy templates
 - ❌ `POST /api/users/policies/from-template` - Create from template
 - ❌ `GET /api/users/policies/:id/permissions` - List permissions
 - ❌ `POST /api/users/policies/:id/permissions` - Add permission
@@ -53,21 +53,21 @@
 - ❌ `GET /api/applications/:id` - Get public app info
 - ❌ `PUT /api/applications/:id/verify` - Mark app as verified (admin)
 
-## Authorization Management Endpoints (ALL MISSING)
-- ❌ `GET /api/users/authorizations` - List active authorizations
-- ❌ `POST /api/users/authorizations` - Create manual authorization
-- ❌ `GET /api/users/authorizations/:id` - Get authorization details
-- ❌ `PUT /api/users/authorizations/:id` - Update (extend expiry, change policy)
-- ❌ `DELETE /api/users/authorizations/:id` - Revoke authorization
-- ❌ `GET /api/users/authorizations/:id/bunker` - Get bunker connection URL
+## Authorization Management Endpoints (MOSTLY IMPLEMENTED)
+- ✅ `GET /api/users/authorizations` - List active authorizations
+- ✅ `POST /api/users/authorizations` - Create manual authorization
+- ✅ `GET /api/users/authorizations/:id` - Get authorization details
+- ✅ `PUT /api/users/authorizations/:id` - Update (extend expiry, change policy)
+- ✅ `DELETE /api/users/authorizations/:id` - Revoke authorization
+- ✅ `GET /api/users/authorizations/:id/bunker-url` - Get bunker connection URL (Note: bunker-url not bunker)
 - ❌ `GET /api/users/authorizations/:id/usage` - Get usage statistics
 - ❌ `POST /api/users/authorizations/:id/regenerate` - New bunker secret
 
-## Authorization Request Endpoints (ALL MISSING)
-- ❌ `GET /api/auth/requests` - List pending authorization requests
+## Authorization Request Endpoints (PARTIALLY IMPLEMENTED)
+- ✅ `GET /api/auth/requests` - List pending authorization requests
 - ❌ `GET /api/auth/requests/:id` - Get request details
-- ❌ `POST /api/auth/requests/:id/approve` - Approve with params
-- ❌ `POST /api/auth/requests/:id/reject` - Reject request
+- ✅ `POST /api/auth/requests/:id/approve` - Approve with params
+- ✅ `POST /api/auth/requests/:id/reject` - Reject request
 - ❌ `GET /api/auth/connection-attempts` - View recent attempts
 - ❌ `POST /api/auth/connection-attempts/:id/block` - Block app domain
 
@@ -105,19 +105,19 @@
 
 ## Implementation Priority
 
-### Phase 1 - Core Functionality (MUST HAVE)
-1. User keys endpoints (create, list, get)
-2. Basic policy endpoints (create, list, templates)
-3. Authorization creation endpoint
-4. Authorization requests (list, approve, reject)
-5. Bunker URL generation
+### Phase 1 - Core Functionality (COMPLETED ✅)
+1. ✅ User keys endpoints (create, list, get, update, delete, rotate, set primary)
+2. ✅ Basic policy endpoints (create, list, templates, update, delete)
+3. ✅ Authorization creation endpoint
+4. ✅ Authorization requests (list, approve, reject)
+5. ✅ Bunker URL generation
 
-### Phase 2 - Management (SHOULD HAVE)
-1. Full key management (rotate, delete, import)
-2. Policy permissions management
-3. Application listing and revocation
-4. Authorization management (update, revoke)
-5. Activity logging
+### Phase 2 - Management (IN PROGRESS 🚧)
+1. ✅ Full key management (rotate, delete) ❌ (import)
+2. ❌ Policy permissions management
+3. ❌ Application listing and revocation
+4. ✅ Authorization management (update, revoke)
+5. ❌ Activity logging
 
 ### Phase 3 - Enhanced Features (NICE TO HAVE)
 1. WebAuthn implementation
