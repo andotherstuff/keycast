@@ -7,6 +7,7 @@ use axum::{
 use sqlx::SqlitePool;
 
 use crate::api::http::{auth, nip05, teams, users};
+use crate::api::http::users::authorization_requests;
 
 pub fn routes(pool: SqlitePool) -> Router {
     tracing::debug!("Building routes");
@@ -21,6 +22,7 @@ pub fn routes(pool: SqlitePool) -> Router {
         .route("/auth/passkey/login", post(auth::login_passkey))
         .route("/auth/oauth/:provider", get(auth::oauth_init))
         .route("/auth/oauth/:provider/callback", get(auth::oauth_callback))
+        .nest("/auth/requests", authorization_requests::routes())
         .with_state(pool.clone());
     
     // Protected routes (require auth middleware)

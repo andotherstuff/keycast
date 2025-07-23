@@ -4,6 +4,7 @@
 pub mod keys;
 pub mod policies;
 pub mod authorizations;
+pub mod authorization_requests;
 pub mod profile;
 
 use axum::Router;
