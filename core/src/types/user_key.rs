@@ -175,6 +175,26 @@ impl UserKey {
         }
     }
     
+    /// Find key by string ID and user ID (for new schema compatibility)
+    pub async fn find(
+        pool: &SqlitePool,
+        id: &str,
+        user_id: &str,
+    ) -> Result<Self, UserKeyError> {
+        match sqlx::query_as::<_, UserKey>(
+            "SELECT * FROM user_keys WHERE id = ?1 AND user_id = ?2"
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        {
+            Ok(key) => Ok(key),
+            Err(sqlx::Error::RowNotFound) => Err(UserKeyError::NotFound),
+            Err(e) => Err(UserKeyError::Database(e)),
+        }
+    }
+    
     /// Find key by public key
     pub async fn find_by_public_key(
         pool: &SqlitePool,
