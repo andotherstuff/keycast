@@ -1,0 +1,82 @@
+steps:
+  # Build the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest', '.']
+  
+  # Push the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest']
+
+  # Deploy API service
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'keycast-api'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--command'
+      - 'api'
+      - '--port'
+      - '3000'
+      - '--set-env-vars'
+      - 'RUST_LOG=info'
+      - '--set-secrets'
+      - 'MASTER_KEY_PATH=/secrets/master.key=keycast-master-key:latest'
+      - '--memory'
+      - '512Mi'
+
+  # Deploy Web service
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'keycast-web'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--command'
+      - 'web'
+      - '--port'
+      - '5173'
+      - '--set-env-vars'
+      - 'NODE_ENV=production,VITE_DOMAIN=keycast-test.openvine-co.com,VITE_ALLOWED_PUBKEYS='
+      - '--memory'
+      - '256Mi'
+
+  # Deploy Signer service
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'keycast-signer'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--command'
+      - 'signer'
+      - '--set-env-vars'
+      - 'RUST_LOG=info,keycast_signer=debug'
+      - '--set-secrets'
+      - 'MASTER_KEY_PATH=/secrets/master.key=keycast-master-key:latest'
+      - '--memory'
+      - '256Mi'
+
+images:
+  - 'us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest'

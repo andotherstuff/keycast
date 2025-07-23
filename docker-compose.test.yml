@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  keycast-api-test:
+    container_name: keycast-api-test
+    build: .
+    command: api
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./database:/app/database
+      - ./master.key:/app/master.key
+    environment:
+      - RUST_LOG=debug
+      - DATABASE_URL=sqlite:///app/database/keycast.db
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh", "api"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - keycast-test
+
+  keycast-web-test:
+    container_name: keycast-web-test
+    build:
+      context: .
+      args:
+        - VITE_DOMAIN=localhost:3001
+        - VITE_ALLOWED_PUBKEYS=${ALLOWED_PUBKEYS:-""}
+    command: web
+    ports:
+      - "5174:5173"
+    depends_on:
+      keycast-api-test:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - WAIT_FOR_API=true
+      - HOST=0.0.0.0
+      - PORT=5173
+      - VITE_DOMAIN=localhost:3001
+      - VITE_ALLOWED_PUBKEYS=${ALLOWED_PUBKEYS:-""}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh", "web"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - keycast-test
+
+  keycast-signer-test:
+    container_name: keycast-signer-test
+    build:
+      context: .
+    command: signer
+    volumes:
+      - ./database:/app/database
+      - ./signer/config.toml:/app/signer/config.toml
+      - ./master.key:/app/master.key
+    environment:
+      - RUST_LOG=debug,keycast_signer=debug
+      - MASTER_KEY_PATH=/app/master.key
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh", "signer"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      keycast-api-test:
+        condition: service_healthy
+    networks:
+      - keycast-test
+
+networks:
+  keycast-test:
+    name: keycast-test

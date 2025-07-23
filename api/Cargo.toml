@@ -10,6 +10,7 @@ aes-gcm = "0.10"
 async-trait = "0.1"
 axum = "0.7"
 base64 = { workspace = true }
+bcrypt = "0.15"
 chrono = { workspace = true }
 config = { workspace = true }
 keycast_core = { path = "../core" }

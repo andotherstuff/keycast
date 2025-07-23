@@ -20,6 +20,26 @@ Keycast is fully open source and will offer both a hosted version (if you don't 
 - [ ] Umbrel app
 - [ ] CLI for managing teams, keys, users, and policies
 
+## Testing
+
+Quick testing commands:
+
+```bash
+# First time setup
+./test-quickstart.sh setup
+
+# Test locally
+./test-quickstart.sh local
+
+# Test with Docker
+./test-quickstart.sh docker
+
+# Deploy to Google Cloud
+./test-quickstart.sh gcloud
+```
+
+See [TESTING.md](./TESTING.md) for detailed testing documentation.
+
 ## Contributing
 
 Contributions are welcome! Please fork or clone the repository and submit a PR with your changes. Small, well-documented changes are appreciated.

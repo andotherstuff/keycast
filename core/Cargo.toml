@@ -8,6 +8,7 @@ edition = "2021"
 aes-gcm = "0.10"
 async-trait = "0.1"
 base64 = { workspace = true }
+bcrypt = "0.15"
 chrono = { workspace = true }
 dotenv = { workspace = true }
 nostr = { workspace = true }

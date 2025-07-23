@@ -14,7 +14,10 @@
 		"build:signer": "cd signer && cargo build --release",
 		"db:reset": "sqlx database reset --database-url sqlite:./database/keycast.db --source ./database/migrations",
 		"key:generate": "./scripts/generate_key.sh",
-		"key:generate:force": "./scripts/generate_key.sh --force"
+		"key:generate:force": "./scripts/generate_key.sh --force",
+		"test": "./scripts/test-runner.sh --env local",
+		"test:docker": "./scripts/test-runner.sh --env local --docker",
+		"test:gcloud": "./scripts/test-runner.sh --env gcloud"
 	},
 	"devDependencies": {
 		"concurrently": "^9.1.2"
