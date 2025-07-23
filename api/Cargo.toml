@@ -29,3 +29,7 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+hyper = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }

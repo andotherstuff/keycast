@@ -85,10 +85,10 @@ async fn list_applications(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    let total = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM applications WHERE ($1 = false OR is_verified = true)",
-        params.verified_only
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM applications WHERE (? = false OR is_verified = true)"
     )
+    .bind(params.verified_only)
     .fetch_one(pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -145,7 +145,21 @@ async fn list_user_applications(
 ) -> Result<Json<Vec<UserApplicationInfo>>, StatusCode> {
     
     // Get all applications that have authorizations for this user
-    let user_apps = sqlx::query!(
+    #[derive(sqlx::FromRow)]
+    struct UserAppRow {
+        id: String,
+        name: String,
+        domain: String,
+        description: Option<String>,
+        icon_url: Option<String>,
+        is_verified: bool,
+        first_seen_at: chrono::DateTime<chrono::Utc>,
+        last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+        active_authorizations: Option<i64>,
+        total_requests: Option<i64>,
+    }
+    
+    let user_apps = sqlx::query_as::<_, UserAppRow>(
         r#"
         SELECT DISTINCT
             a.id,
@@ -160,13 +174,14 @@ async fn list_user_applications(
             COUNT(ar.id) as total_requests
         FROM applications a
         INNER JOIN authorizations auth ON auth.app_id = a.id
-        LEFT JOIN authorization_requests ar ON ar.app_id = a.id AND ar.user_id = $1
-        WHERE auth.user_id = $1 AND auth.revoked_at IS NULL
+        LEFT JOIN authorization_requests ar ON ar.app_id = a.id AND ar.user_id = ?
+        WHERE auth.user_id = ? AND auth.revoked_at IS NULL
         GROUP BY a.id
         ORDER BY a.last_used_at DESC NULLS LAST
-        "#,
-        user_id
+        "#
     )
+    .bind(user_id.to_string())
+    .bind(user_id.to_string())
     .fetch_all(pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -175,7 +190,7 @@ async fn list_user_applications(
         .into_iter()
         .map(|row| UserApplicationInfo {
             app: ApplicationInfo {
-                id: row.id,
+                id: Uuid::parse_str(&row.id).unwrap_or_default(),
                 name: row.name,
                 domain: row.domain,
                 description: row.description,
@@ -199,7 +214,7 @@ async fn get_user_application(
 ) -> Result<Json<UserApplicationInfo>, StatusCode> {
     
     // Check if user has any authorizations for this app
-    let user_app = sqlx::query!(
+    let user_app = sqlx::query_as::<_, UserAppRow>(
         r#"
         SELECT 
             a.id,
@@ -214,13 +229,14 @@ async fn get_user_application(
             COUNT(ar.id) as total_requests
         FROM applications a
         INNER JOIN authorizations auth ON auth.app_id = a.id
-        LEFT JOIN authorization_requests ar ON ar.app_id = a.id AND ar.user_id = $1
-        WHERE a.id = $2 AND auth.user_id = $1 AND auth.revoked_at IS NULL
+        LEFT JOIN authorization_requests ar ON ar.app_id = a.id AND ar.user_id = ?
+        WHERE a.id = ? AND auth.user_id = ? AND auth.revoked_at IS NULL
         GROUP BY a.id
-        "#,
-        user_id,
-        app_id
+        "#
     )
+    .bind(user_id.to_string())
+    .bind(app_id.to_string())
+    .bind(user_id.to_string())
     .fetch_optional(pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -228,7 +244,7 @@ async fn get_user_application(
     
     Ok(Json(UserApplicationInfo {
         app: ApplicationInfo {
-            id: user_app.id,
+            id: Uuid::parse_str(&user_app.id).unwrap_or_default(),
             name: user_app.name,
             domain: user_app.domain,
             description: user_app.description,
@@ -249,15 +265,15 @@ async fn revoke_app_authorizations(
 ) -> Result<StatusCode, StatusCode> {
     
     // Revoke all active authorizations for this app
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         UPDATE authorizations 
-        SET revoked_at = NOW() 
-        WHERE user_id = $1 AND app_id = $2 AND revoked_at IS NULL
-        "#,
-        user_id,
-        app_id
+        SET revoked_at = datetime('now') 
+        WHERE user_id = ? AND app_id = ? AND revoked_at IS NULL
+        "#
     )
+    .bind(user_id.to_string())
+    .bind(app_id.to_string())
     .execute(pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -302,4 +318,271 @@ async fn require_admin(
     // TODO: Implement proper admin check
     // For now, this is a placeholder that always returns forbidden
     Err(StatusCode::FORBIDDEN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::SqlitePool;
+    
+    async fn setup_test_db() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database");
+        
+        // Create necessary tables for testing
+        sqlx::query(
+            r#"
+            CREATE TABLE applications (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                domain TEXT NOT NULL UNIQUE,
+                description TEXT,
+                icon_url TEXT,
+                pubkey TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                first_seen_at TEXT NOT NULL,
+                last_used_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create applications table");
+        
+        sqlx::query(
+            r#"
+            CREATE TABLE authorizations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                app_id TEXT NOT NULL,
+                user_key_id TEXT NOT NULL,
+                policy_id INTEGER NOT NULL,
+                max_uses INTEGER,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (app_id) REFERENCES applications(id)
+            )
+            "#
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create authorizations table");
+        
+        sqlx::query(
+            r#"
+            CREATE TABLE authorization_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                app_id TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                approved_at TEXT,
+                rejected_at TEXT,
+                created_at TEXT NOT NULL
+            )
+            "#
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create authorization_requests table");
+        
+        pool
+    }
+    
+    async fn create_test_app(pool: &SqlitePool, domain: &str, verified: bool) -> Application {
+        let app = Application {
+            id: Uuid::new_v4(),
+            name: format!("Test App {}", domain),
+            domain: domain.to_string(),
+            description: Some("Test application".to_string()),
+            icon_url: Some("https://example.com/icon.png".to_string()),
+            pubkey: None,
+            metadata: serde_json::json!({"test": true}).to_string(),
+            is_verified: verified,
+            first_seen_at: chrono::Utc::now(),
+            last_used_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        
+        sqlx::query(
+            r#"
+            INSERT INTO applications (
+                id, name, domain, description, icon_url, pubkey, 
+                metadata, is_verified, first_seen_at, last_used_at, 
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#
+        )
+        .bind(app.id.to_string())
+        .bind(&app.name)
+        .bind(&app.domain)
+        .bind(&app.description)
+        .bind(&app.icon_url)
+        .bind(&app.pubkey)
+        .bind(&app.metadata)
+        .bind(app.is_verified)
+        .bind(app.first_seen_at)
+        .bind(app.last_used_at)
+        .bind(app.created_at)
+        .bind(app.updated_at)
+        .execute(pool)
+        .await
+        .expect("Failed to create test app");
+        
+        app
+    }
+    
+    #[tokio::test]
+    async fn test_list_applications_query_logic() {
+        let pool = setup_test_db().await;
+        
+        // Create test apps
+        create_test_app(&pool, "app1.com", true).await;
+        create_test_app(&pool, "app2.com", false).await;
+        create_test_app(&pool, "app3.com", true).await;
+        
+        // Test listing all apps
+        let all_apps = Application::list_all(&pool, Some(10), Some(0))
+            .await
+            .expect("Failed to list apps");
+        
+        assert_eq!(all_apps.len(), 3);
+        
+        // Test verified count
+        let verified_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM applications WHERE is_verified = true"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to count verified apps")
+        .unwrap_or(0);
+        
+        assert_eq!(verified_count, 2);
+    }
+    
+    #[tokio::test]
+    async fn test_user_applications_query() {
+        let pool = setup_test_db().await;
+        let user_id = Uuid::new_v4();
+        
+        // Create apps and authorizations
+        let app1 = create_test_app(&pool, "userapp1.com", true).await;
+        let app2 = create_test_app(&pool, "userapp2.com", false).await;
+        
+        // Create authorization for user
+        sqlx::query(
+            r#"
+            INSERT INTO authorizations (
+                id, user_id, app_id, user_key_id, policy_id,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            "#
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id.to_string())
+        .bind(app1.id.to_string())
+        .bind(Uuid::new_v4().to_string())
+        .bind(1)
+        .execute(&pool)
+        .await
+        .expect("Failed to create authorization");
+        
+        // Query user apps
+        #[derive(sqlx::FromRow)]
+        struct TestUserApp {
+            id: String,
+            name: String,
+            domain: String,
+            active_authorizations: Option<i64>,
+        }
+        
+        let user_apps = sqlx::query_as::<_, TestUserApp>(
+            r#"
+            SELECT DISTINCT
+                a.id,
+                a.name,
+                a.domain,
+                COUNT(auth.id) as active_authorizations
+            FROM applications a
+            INNER JOIN authorizations auth ON auth.app_id = a.id
+            WHERE auth.user_id = ? AND auth.revoked_at IS NULL
+            GROUP BY a.id
+            "#
+        )
+        .bind(user_id.to_string())
+        .fetch_all(&pool)
+        .await
+        .expect("Failed to query user apps");
+        
+        assert_eq!(user_apps.len(), 1);
+        assert_eq!(user_apps[0].domain, "userapp1.com");
+    }
+    
+    #[tokio::test]
+    async fn test_revoke_authorization() {
+        let pool = setup_test_db().await;
+        let user_id = Uuid::new_v4();
+        let app = create_test_app(&pool, "revoke-test.com", true).await;
+        
+        // Create authorization
+        sqlx::query(
+            r#"
+            INSERT INTO authorizations (
+                id, user_id, app_id, user_key_id, policy_id,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            "#
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id.to_string())
+        .bind(app.id.to_string())
+        .bind(Uuid::new_v4().to_string())
+        .bind(1)
+        .execute(&pool)
+        .await
+        .expect("Failed to create authorization");
+        
+        // Revoke it
+        let result = sqlx::query(
+            r#"
+            UPDATE authorizations 
+            SET revoked_at = datetime('now') 
+            WHERE user_id = ? AND app_id = ? AND revoked_at IS NULL
+            "#
+        )
+        .bind(user_id.to_string())
+        .bind(app.id.to_string())
+        .execute(&pool)
+        .await
+        .expect("Failed to revoke authorization");
+        
+        assert_eq!(result.rows_affected(), 1);
+        
+        // Verify it's revoked
+        let active_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*) 
+            FROM authorizations 
+            WHERE user_id = ? AND app_id = ? AND revoked_at IS NULL
+            "#
+        )
+        .bind(user_id.to_string())
+        .bind(app.id.to_string())
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to count active authorizations")
+        .unwrap_or(0);
+        
+        assert_eq!(active_count, 0);
+    }
 }
