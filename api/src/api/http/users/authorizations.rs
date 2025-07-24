@@ -19,6 +19,7 @@ use keycast_core::types::{
     policy::Policy,
     user_key::UserKey,
 };
+use keycast_core::encryption::KeyManager;
 
 // ============ Request/Response Types ============
 
@@ -91,7 +92,7 @@ pub struct BunkerUrlResponse {
 
 // ============ Routes ============
 
-pub fn routes() -> Router {
+pub fn routes() -> Router<sqlx::SqlitePool> {
     Router::new()
         .route("/", get(list_authorizations).post(create_authorization))
         .route("/:id", get(get_authorization).put(update_authorization).delete(revoke_authorization))
@@ -106,7 +107,7 @@ pub async fn list_authorizations(
     State(pool): State<SqlitePool>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Get authorizations with enhanced type
     let authorizations = sqlx::query_as::<_, AuthorizationEnhanced>(
@@ -149,7 +150,7 @@ pub async fn list_authorizations(
         .count as usize;
         
         // Determine status
-        let status = if auth.status == "revoked" {
+        let status = if auth.status.as_deref() == Some("revoked") {
             AuthorizationStatus::Revoked
         } else if let Some(expires_at) = auth.expires_at {
             if expires_at < chrono::Utc::now() {
@@ -179,7 +180,7 @@ pub async fn list_authorizations(
                 },
                 bunker_public_key: auth.bunker_public_key,
                 max_uses: auth.max_uses.map(|u| u as u16),
-                current_uses: auth.current_uses as u16,
+                current_uses: 0, // TODO: Calculate from authorization usage logs
                 expires_at: auth.expires_at,
                 status,
                 created_at: auth.created_at,
@@ -203,7 +204,7 @@ pub async fn create_authorization(
     headers: axum::http::HeaderMap,
     Json(req): Json<CreateAuthorizationRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Validate user owns the key
     let key = sqlx::query_as::<_, UserKey>(
@@ -309,7 +310,7 @@ pub async fn get_authorization(
     Path(auth_id): Path<u32>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     let auth = get_authorization_with_details(&pool, auth_id, &user.id).await?;
     
@@ -324,7 +325,7 @@ pub async fn update_authorization(
     headers: axum::http::HeaderMap,
     Json(req): Json<UpdateAuthorizationRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Check authorization exists and belongs to user
     let exists = sqlx::query!(
@@ -402,7 +403,7 @@ pub async fn revoke_authorization(
     Path(auth_id): Path<u32>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Update status to revoked
     let result = sqlx::query!(
@@ -432,7 +433,7 @@ pub async fn get_bunker_url(
     Path(auth_id): Path<u32>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Get authorization
     let auth = sqlx::query!(
@@ -450,13 +451,13 @@ pub async fn get_bunker_url(
     .ok_or_else(|| ApiError::not_found("Authorization not found"))?;
     
     // Check if active
-    if auth.status != "active" {
+    if auth.status.as_deref() != Some("active") {
         return Err(ApiError::bad_request("Authorization is not active"));
     }
     
     // Parse relays
-    let relays: Vec<String> = if let Some(relays_json) = auth.relays {
-        serde_json::from_str(&relays_json)
+    let relays: Vec<String> = if !auth.relays.is_empty() {
+        serde_json::from_str(&auth.relays)
             .map_err(|e| ApiError::internal(format!("Failed to parse relays: {}", e)))?
     } else {
         vec![]
@@ -465,7 +466,7 @@ pub async fn get_bunker_url(
     // Build bunker URL
     // Format: bunker://<pubkey>?relay=<relay1>&relay=<relay2>&secret=<secret>
     let relay_params: Vec<String> = relays.iter()
-        .map(|r| format!("relay={}", urlencoding::encode(r)))
+        .map(|r| format!("relay={}", r))
         .collect();
     
     let bunker_url = format!(
@@ -524,7 +525,7 @@ async fn get_authorization_with_details(
     .count as usize;
     
     // Determine status
-    let status = if auth.status == "revoked" {
+    let status = if auth.status.as_deref() == Some("revoked") {
         AuthorizationStatus::Revoked
     } else if let Some(expires_at) = auth.expires_at {
         if expires_at < chrono::Utc::now() {
@@ -553,7 +554,7 @@ async fn get_authorization_with_details(
         },
         bunker_public_key: auth.bunker_public_key,
         max_uses: auth.max_uses.map(|u| u as u16),
-        current_uses: auth.current_uses as u16,
+        current_uses: 0, // TODO: Calculate from authorization usage logs
         expires_at: auth.expires_at,
         status,
         created_at: auth.created_at,

@@ -52,7 +52,7 @@ pub struct CreateKeyResponse {
 
 // ============ Routes ============
 
-pub fn routes() -> Router {
+pub fn routes() -> Router<sqlx::SqlitePool> {
     Router::new()
         .route("/", get(list_keys).post(create_key))
         .route("/:id", get(get_key).put(update_key).delete(delete_key))
@@ -68,7 +68,7 @@ pub async fn list_keys(
     State(pool): State<SqlitePool>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     let public_key = PublicKey::from_hex(&user.public_key)
         .map_err(|_| ApiError::internal("Invalid user public key"))?;
     
@@ -92,7 +92,7 @@ pub async fn create_key(
     headers: axum::http::HeaderMap,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     let public_key = PublicKey::from_hex(&user.public_key)
         .map_err(|_| ApiError::internal("Invalid user public key"))?;
     
@@ -121,7 +121,7 @@ pub async fn create_key(
     // Create the key
     let key = UserKey::create(
         &pool,
-        key_manager.as_ref(),
+        key_manager,
         &public_key,
         &req.name,
         req.key_type,
@@ -159,7 +159,7 @@ pub async fn get_key(
     Path(key_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Find the key and verify ownership
     let key = UserKey::find(&pool, &key_id, &user.id)
@@ -182,7 +182,7 @@ pub async fn update_key(
     headers: axum::http::HeaderMap,
     Json(req): Json<UpdateKeyRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Verify the key exists and belongs to the user
     let mut key = UserKey::find(&pool, &key_id, &user.id)
@@ -239,7 +239,7 @@ pub async fn delete_key(
     Path(key_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Get the key to check its type
     let key = UserKey::find(&pool, &key_id, &user.id)
@@ -283,11 +283,11 @@ pub async fn rotate_key(
     Path(key_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     let key_manager = get_key_manager()?;
     
     // Get the existing key
-    let old_key = UserKey::find(&pool, &key_id, &user.id)
+    let _old_key = UserKey::find(&pool, &key_id, &user.id)
         .await
         .map_err(|_| ApiError::not_found("Key not found"))?;
     
@@ -295,7 +295,7 @@ pub async fn rotate_key(
     let new_keys = nostr_sdk::Keys::generate();
     let new_secret = new_keys.secret_key().as_secret_bytes();
     let encrypted_secret = key_manager
-        .encrypt(new_secret)
+        .encrypt(new_secret as &[u8])
         .await
         .map_err(|e| ApiError::internal(format!("Failed to encrypt key: {}", e)))?;
     
@@ -330,7 +330,7 @@ pub async fn set_primary_key(
     Path(key_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Verify the key exists and belongs to the user
     let key = UserKey::find(&pool, &key_id, &user.id)

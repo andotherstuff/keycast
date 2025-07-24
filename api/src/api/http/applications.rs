@@ -14,7 +14,7 @@ use axum::{
 use keycast_core::types::application::Application;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use uuid::Uuid;
+// UUID not needed - applications use u32 IDs
 
 pub fn routes() -> Router<SqlitePool> {
     Router::new()
@@ -55,7 +55,7 @@ struct ApplicationListResponse {
 
 #[derive(Debug, Serialize)]
 struct ApplicationInfo {
-    id: Uuid,
+    id: u32,
     name: String,
     domain: String,
     description: Option<String>,
@@ -83,7 +83,7 @@ async fn list_applications(
     let offset = ((params.page - 1) * params.per_page) as i64;
     let limit = params.per_page as i64;
     
-    let applications = Application::list_all(&pool, Some(limit), Some(offset))
+    let applications = Application::list_all(&pool, limit, offset)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
@@ -100,7 +100,7 @@ async fn list_applications(
         .into_iter()
         .filter(|app| !params.verified_only || app.is_verified)
         .map(|app| ApplicationInfo {
-            id: Uuid::from_u128(app.id as u128),
+            id: app.id,
             name: app.name,
             domain: app.domain,
             description: app.description,
@@ -120,17 +120,16 @@ async fn list_applications(
 
 async fn get_application(
     State(pool): State<SqlitePool>,
-    Path(id): Path<Uuid>,
+    Path(id): Path<u32>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
-    // Convert UUID to u32 (applications table uses INTEGER id)
-    let app_id = id.as_u128() as u32;
+    let app_id = id;
     
     let app = Application::find_by_id(&pool, app_id)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
     
     Ok(Json(ApplicationInfo {
-        id: Uuid::from_u128(app.id as u128),
+        id: app.id,
         name: app.name,
         domain: app.domain,
         description: app.description,
@@ -197,7 +196,7 @@ async fn list_user_applications(
         .into_iter()
         .map(|row| UserApplicationInfo {
             app: ApplicationInfo {
-                id: Uuid::parse_str(&row.id).unwrap_or_default(),
+                id: row.id.parse::<u32>().unwrap_or(0),
                 name: row.name,
                 domain: row.domain,
                 description: row.description,
@@ -217,7 +216,7 @@ async fn list_user_applications(
 async fn get_user_application(
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
-    Path(app_id): Path<Uuid>,
+    Path(app_id): Path<u32>,
 ) -> Result<Json<UserApplicationInfo>, StatusCode> {
     let user = get_user_from_session(&pool, &headers)
         .await
@@ -255,7 +254,7 @@ async fn get_user_application(
     
     Ok(Json(UserApplicationInfo {
         app: ApplicationInfo {
-            id: Uuid::parse_str(&user_app.id).unwrap_or_default(),
+            id: user_app.id.parse::<u32>().unwrap_or(0),
             name: user_app.name,
             domain: user_app.domain,
             description: user_app.description,
@@ -272,7 +271,7 @@ async fn get_user_application(
 async fn revoke_app_authorizations(
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
-    Path(app_id): Path<Uuid>,
+    Path(app_id): Path<u32>,
 ) -> Result<StatusCode, StatusCode> {
     let user = get_user_from_session(&pool, &headers)
         .await
@@ -309,12 +308,11 @@ struct VerifyApplicationRequest {
 
 async fn verify_application(
     State(pool): State<SqlitePool>,
-    Path(id): Path<Uuid>,
+    Path(id): Path<u32>,
     Json(req): Json<VerifyApplicationRequest>,
 ) -> Result<StatusCode, StatusCode> {
     
-    // Convert UUID to i32 (applications table uses INTEGER id)
-    let app_id = id.as_u128() as u32;
+    let app_id = id;
     
     let mut app = Application::find_by_id(&pool, app_id)
         .await

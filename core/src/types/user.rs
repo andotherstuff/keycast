@@ -66,97 +66,37 @@ impl User {
         }
     }
 
-    pub async fn teams(&self, pool: &SqlitePool) -> Result<Vec<TeamWithRelations>, UserError> {
-        let teams = sqlx::query_as::<_, Team>(
-            "SELECT * FROM teams WHERE id IN (SELECT team_id FROM team_users WHERE user_public_key = ?1)",
-        )
-        .bind(self.public_key.clone())
-        .fetch_all(pool)
-        .await?;
-
-        let mut teams_with_relations = Vec::new();
-
-        for team in teams {
-            // Get team_users for this team
-            let team_users = sqlx::query_as::<_, TeamUser>(
-                r#"
-                SELECT tu.* 
-                FROM team_users tu
-                WHERE tu.team_id = ?1
-                "#,
-            )
-            .bind(team.id)
-            .fetch_all(pool)
-            .await?;
-
-            // Get stored keys for this team
-            let stored_keys =
-                sqlx::query_as::<_, StoredKey>("SELECT * FROM stored_keys WHERE team_id = ?1")
-                    .bind(team.id)
-                    .fetch_all(pool)
-                    .await?;
-
-            // Get policies for this team
-            let policies = Team::get_policies_with_permissions(pool, team.id)
-                .await
-                .map_err(|_| UserError::Relations)?;
-
-            teams_with_relations.push(TeamWithRelations {
-                team,
-                team_users,
-                stored_keys: stored_keys
-                    .into_iter()
-                    .map(|k| k.into())
-                    .collect::<Vec<_>>(),
-                policies,
-            });
-        }
-
-        Ok(teams_with_relations)
+    // DEPRECATED: Team functionality removed in favor of personal authentication
+    pub async fn teams(&self, _pool: &SqlitePool) -> Result<Vec<TeamWithRelations>, UserError> {
+        // Team functionality has been removed. All users now use personal authentication.
+        // This method returns an empty list to maintain API compatibility during migration.
+        Ok(Vec::new())
     }
 
-    /// Check if a user is an admin of a team
+    /// DEPRECATED: Team functionality removed
     pub async fn is_team_admin(
-        pool: &SqlitePool,
-        pubkey: &PublicKey,
-        team_id: u32,
+        _pool: &SqlitePool,
+        _pubkey: &PublicKey,
+        _team_id: u32,
     ) -> Result<bool, UserError> {
-        let query = "SELECT COUNT(*) FROM team_users WHERE user_public_key = ?1 AND team_id = ?2 AND role = 'admin'";
-        let count = sqlx::query_scalar::<_, i64>(query)
-            .bind(pubkey.to_hex())
-            .bind(team_id)
-            .fetch_one(pool)
-            .await?;
-        Ok(count > 0)
+        Ok(false)
     }
 
-    /// Check if a user is a member of a team
+    /// DEPRECATED: Team functionality removed
     pub async fn is_team_member(
-        pool: &SqlitePool,
-        pubkey: &PublicKey,
-        team_id: u32,
+        _pool: &SqlitePool,
+        _pubkey: &PublicKey,
+        _team_id: u32,
     ) -> Result<bool, UserError> {
-        let query = "SELECT COUNT(*) FROM team_users WHERE user_public_key = ?1 AND team_id = ?2 AND role = 'member'";
-        let count = sqlx::query_scalar::<_, i64>(query)
-            .bind(pubkey.to_hex())
-            .bind(team_id)
-            .fetch_one(pool)
-            .await?;
-        Ok(count > 0)
+        Ok(false)
     }
 
-    /// Check if a user is part of a team (admin or member)
+    /// DEPRECATED: Team functionality removed
     pub async fn is_team_teammate(
-        pool: &SqlitePool,
-        pubkey: &PublicKey,
-        team_id: u32,
+        _pool: &SqlitePool,
+        _pubkey: &PublicKey,
+        _team_id: u32,
     ) -> Result<bool, UserError> {
-        let query = "SELECT COUNT(*) FROM team_users WHERE user_public_key = ?1 AND team_id = ?2";
-        let count = sqlx::query_scalar::<_, i64>(query)
-            .bind(pubkey.to_hex())
-            .bind(team_id)
-            .fetch_one(pool)
-            .await?;
-        Ok(count > 0)
+        Ok(false)
     }
 }

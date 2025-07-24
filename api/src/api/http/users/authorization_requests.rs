@@ -68,7 +68,7 @@ pub struct ApproveResponse {
 
 // ============ Routes ============
 
-pub fn routes() -> Router {
+pub fn routes() -> Router<sqlx::SqlitePool> {
     Router::new()
         .route("/", get(list_authorization_requests))
         .route("/:id", get(get_authorization_request))
@@ -84,10 +84,11 @@ pub async fn list_authorization_requests(
     State(pool): State<SqlitePool>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Initialize authorization flow service
-    let key_manager = Box::new(MasterKeyManager::new());
+    let key_manager = Box::new(FileKeyManager::new()
+        .map_err(|e| ApiError::internal(format!("Failed to create key manager: {}", e)))?);
     let auth_service = AuthorizationFlowService::new(pool.clone(), key_manager);
     
     // Get pending requests
@@ -131,7 +132,7 @@ pub async fn get_authorization_request(
     Path(request_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Query the specific request
     #[derive(sqlx::FromRow)]
@@ -204,7 +205,7 @@ pub async fn approve_request(
     headers: axum::http::HeaderMap,
     Json(body): Json<ApproveRequestBody>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Validate user owns the key
     let key_count = sqlx::query_scalar::<_, i64>(
@@ -239,7 +240,8 @@ pub async fn approve_request(
     }
     
     // Initialize authorization flow service
-    let key_manager = Box::new(MasterKeyManager::new());
+    let key_manager = Box::new(FileKeyManager::new()
+        .map_err(|e| ApiError::internal(format!("Failed to create key manager: {}", e)))?);
     let auth_service = AuthorizationFlowService::new(pool.clone(), key_manager);
     
     // Approve the request
@@ -280,10 +282,11 @@ pub async fn reject_request(
     headers: axum::http::HeaderMap,
     Json(_body): Json<RejectRequestBody>, // Reason for future use
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Initialize authorization flow service
-    let key_manager = Box::new(MasterKeyManager::new());
+    let key_manager = Box::new(FileKeyManager::new()
+        .map_err(|e| ApiError::internal(format!("Failed to create key manager: {}", e)))?);
     let auth_service = AuthorizationFlowService::new(pool.clone(), key_manager);
     
     // Reject the request

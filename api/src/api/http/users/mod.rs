@@ -10,7 +10,7 @@ pub mod profile;
 use axum::Router;
 use crate::api::http::applications;
 
-pub fn routes() -> Router {
+pub fn routes() -> Router<sqlx::SqlitePool> {
     Router::new()
         .nest("/keys", keys::routes())
         .nest("/policies", policies::routes())

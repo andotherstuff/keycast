@@ -80,17 +80,8 @@ impl Team {
             .fetch_one(pool)
             .await?;
 
-        // Get team_users for this team
-        let team_users = sqlx::query_as::<_, TeamUser>(
-            r#"
-            SELECT tu.* 
-            FROM team_users tu
-            WHERE tu.team_id = ?1
-            "#,
-        )
-        .bind(team_id)
-        .fetch_all(pool)
-        .await?;
+        // DEPRECATED: Team users functionality removed
+        let team_users = Vec::<TeamUser>::new();
 
         // Get stored keys for this team
         let stored_keys =

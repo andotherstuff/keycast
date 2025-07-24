@@ -72,7 +72,7 @@ pub struct PolicyTemplateResponse {
 
 // ============ Routes ============
 
-pub fn routes() -> Router {
+pub fn routes() -> Router<sqlx::SqlitePool> {
     Router::new()
         .route("/", get(list_policies).post(create_policy))
         .route("/templates", get(get_policy_templates))
@@ -89,7 +89,7 @@ pub async fn list_policies(
     State(pool): State<SqlitePool>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Get policies for user
     let policies = sqlx::query_as::<_, Policy>(
@@ -105,7 +105,7 @@ pub async fn list_policies(
     for policy in policies {
         let permissions = sqlx::query!(
             r#"
-            SELECT p.id, p.name, p.name as identifier, pp.permission_data
+            SELECT p.id, p.name, pp.permission_data
             FROM permissions p
             JOIN policy_permissions pp ON p.id = pp.permission_id
             WHERE pp.policy_id = ?
@@ -119,8 +119,8 @@ pub async fn list_policies(
         let permission_responses: Vec<PermissionResponse> = permissions
             .into_iter()
             .map(|p| PermissionResponse {
-                id: p.id as u32,
-                identifier: p.identifier,
+                id: p.id.unwrap_or(0) as u32,
+                identifier: p.name.clone(),
                 name: p.name,
                 permission_data: serde_json::from_str(&p.permission_data).unwrap_or(serde_json::Value::Null),
             })
@@ -151,7 +151,7 @@ pub async fn create_policy(
     headers: axum::http::HeaderMap,
     Json(req): Json<CreatePolicyRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Validate policy name
     if req.name.trim().is_empty() {
@@ -237,17 +237,33 @@ pub async fn create_policy(
 /// GET /api/users/policies/templates
 /// Get available policy templates
 pub async fn get_policy_templates() -> Result<Response, ApiError> {
-    let templates = PolicyTemplates::all();
-    
-    let template_responses: Vec<PolicyTemplateResponse> = templates
-        .into_iter()
-        .map(|t| PolicyTemplateResponse {
-            name: t.name,
-            description: t.description,
-            permissions: t.permissions,
-            icon: t.icon,
-        })
-        .collect();
+    // Create template list manually since PolicyTemplates doesn't have an all() method
+    let template_responses = vec![
+        PolicyTemplateResponse {
+            name: "Social Media".to_string(),
+            description: "Post notes, update profile, interact with others".to_string(),
+            permissions: PolicyTemplates::social_media(),
+            icon: "🌐".to_string(),
+        },
+        PolicyTemplateResponse {
+            name: "Read Only".to_string(),
+            description: "View content and decrypt messages only".to_string(),
+            permissions: PolicyTemplates::read_only(),
+            icon: "👁️".to_string(),
+        },
+        PolicyTemplateResponse {
+            name: "Marketplace".to_string(),
+            description: "Buy, sell, and manage marketplace listings".to_string(),
+            permissions: PolicyTemplates::marketplace(),
+            icon: "🛒".to_string(),
+        },
+        PolicyTemplateResponse {
+            name: "Gaming".to_string(),
+            description: "Play games and manage gaming events".to_string(),
+            permissions: PolicyTemplates::gaming(),
+            icon: "🎮".to_string(),
+        },
+    ];
     
     Ok(Json(template_responses).into_response())
 }
@@ -259,7 +275,7 @@ pub async fn get_policy(
     Path(policy_id): Path<u32>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     let policy = get_policy_with_permissions(&pool, policy_id, &user.id).await?;
     
@@ -274,7 +290,7 @@ pub async fn update_policy(
     headers: axum::http::HeaderMap,
     Json(req): Json<UpdatePolicyRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Check if policy exists and belongs to user
     let exists = sqlx::query!(
@@ -323,7 +339,7 @@ pub async fn delete_policy(
     Path(policy_id): Path<u32>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Check if policy is used in any authorizations
     let auth_count = sqlx::query!(
@@ -369,7 +385,7 @@ pub async fn list_permissions(
     Path(policy_id): Path<u32>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Verify policy belongs to user
     let exists = sqlx::query!(
@@ -388,7 +404,7 @@ pub async fn list_permissions(
     
     let permissions = sqlx::query!(
         r#"
-        SELECT p.id, p.identifier, p.name, pp.permission_data
+        SELECT p.id, p.name, pp.permission_data
         FROM permissions p
         JOIN policy_permissions pp ON p.id = pp.permission_id
         WHERE pp.policy_id = ?
@@ -402,8 +418,8 @@ pub async fn list_permissions(
     let permission_responses: Vec<PermissionResponse> = permissions
         .into_iter()
         .map(|p| PermissionResponse {
-            id: p.id as u32,
-            identifier: p.identifier,
+            id: p.id.unwrap_or(0) as u32,
+            identifier: p.name.clone(),
             name: p.name,
             permission_data: serde_json::from_str(&p.permission_data).unwrap_or(serde_json::Value::Null),
         })
@@ -420,7 +436,7 @@ pub async fn add_permission(
     headers: axum::http::HeaderMap,
     Json(req): Json<CreatePermissionRequest>,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Verify policy belongs to user
     let exists = sqlx::query!(
@@ -439,7 +455,7 @@ pub async fn add_permission(
     
     // Find or create permission type
     let permission = sqlx::query!(
-        "SELECT id FROM permissions WHERE identifier = ?",
+        "SELECT id FROM permissions WHERE name = ?",
         req.identifier
     )
     .fetch_optional(&pool)
@@ -494,7 +510,7 @@ pub async fn remove_permission(
     Path((policy_id, perm_id)): Path<(u32, u32)>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Verify policy belongs to user
     let exists = sqlx::query!(
@@ -548,7 +564,7 @@ async fn get_policy_with_permissions(
     // Get permissions
     let permissions = sqlx::query!(
         r#"
-        SELECT p.id, p.identifier, p.name, pp.permission_data
+        SELECT p.id, p.name, pp.permission_data
         FROM permissions p
         JOIN policy_permissions pp ON p.id = pp.permission_id
         WHERE pp.policy_id = ?
@@ -562,8 +578,8 @@ async fn get_policy_with_permissions(
     let permission_responses: Vec<PermissionResponse> = permissions
         .into_iter()
         .map(|p| PermissionResponse {
-            id: p.id as u32,
-            identifier: p.identifier,
+            id: p.id.unwrap_or(0) as u32,
+            identifier: p.name.clone(),
             name: p.name,
             permission_data: serde_json::from_str(&p.permission_data).unwrap_or(serde_json::Value::Null),
         })

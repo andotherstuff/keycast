@@ -31,7 +31,7 @@ pub struct UpdateProfileRequest {
 #[derive(Debug, Serialize)]
 pub struct UserProfileResponse {
     pub id: String,
-    pub email: String,
+    pub email: Option<String>,
     pub display_name: Option<String>,
     pub nip05_identifier: Option<String>,
     pub avatar_url: Option<String>,
@@ -62,7 +62,7 @@ pub struct UserKeyResponse {
 
 // ============ Routes ============
 
-pub fn routes() -> Router {
+pub fn routes() -> Router<sqlx::SqlitePool> {
     Router::new()
         .route("/profile", get(get_profile).put(update_profile))
 }
@@ -75,10 +75,10 @@ pub async fn get_profile(
     State(pool): State<SqlitePool>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
-    let user = get_user_from_session(&pool, headers).await?;
+    let user = get_user_from_session(&pool, &headers).await?;
     
     // Get auth methods
-    let auth_methods = sqlx::query_as::<_, UserAuth>(
+    let auth_methods = sqlx::query_as::<_, UserAuthMethod>(
         "SELECT * FROM user_auth WHERE user_id = ? ORDER BY created_at"
     )
     .bind(&user.id)
@@ -88,10 +88,23 @@ pub async fn get_profile(
     
     let auth_method_responses: Vec<AuthMethodResponse> = auth_methods
         .into_iter()
-        .map(|auth| AuthMethodResponse {
-            auth_type: auth.auth_type,
-            identifier: auth.identifier,
-            created_at: auth.created_at,
+        .map(|auth| {
+            // Extract identifier from auth_data based on auth_type
+            let identifier = match serde_json::from_str::<serde_json::Value>(&auth.auth_data) {
+                Ok(data) => data.get("identifier")
+                    .or_else(|| data.get("email"))
+                    .or_else(|| data.get("provider"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                Err(_) => "unknown".to_string(),
+            };
+            
+            AuthMethodResponse {
+                auth_type: format!("{:?}", auth.auth_type), // Convert enum to string
+                identifier,
+                created_at: auth.created_at,
+            }
         })
         .collect();
     
@@ -105,7 +118,7 @@ pub async fn get_profile(
     .map_err(|e| ApiError::internal(format!("Failed to fetch primary key: {}", e)))?;
     
     let primary_key_response = primary_key.map(|key| UserKeyResponse {
-        id: key.id,
+        id: key.id.to_string(),
         name: key.name,
         public_key: key.public_key,
     });
@@ -144,18 +157,11 @@ pub async fn get_profile(
     .map_err(|e| ApiError::internal(format!("Failed to count authorizations: {}", e)))?
     .count as usize;
     
-    // Parse additional profile fields from metadata
-    let metadata = user.metadata
-        .and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
+    // Use profile_picture_url from user model
+    let avatar_url = user.profile_picture_url.clone();
     
-    let avatar_url = metadata.get("avatar_url")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    
-    let bio = metadata.get("bio")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    // TODO: Add bio field to database if needed
+    let bio: Option<String> = None;
     
     Ok(Json(UserProfileResponse {
         id: user.id,
@@ -169,7 +175,7 @@ pub async fn get_profile(
         keys_count,
         policies_count,
         active_authorizations_count,
-        email_verified: user.email_verified,
+        email_verified: false, // TODO: Implement email verification
         created_at: user.created_at,
         updated_at: user.updated_at,
     }).into_response())
@@ -182,7 +188,7 @@ pub async fn update_profile(
     headers: axum::http::HeaderMap,
     Json(req): Json<UpdateProfileRequest>,
 ) -> Result<Response, ApiError> {
-    let mut user = get_user_from_session(&pool, headers).await?;
+    let mut user = get_user_from_session(&pool, &headers).await?;
     
     // Validate NIP-05 identifier if provided
     if let Some(ref nip05) = req.nip05_identifier {
@@ -214,12 +220,12 @@ pub async fn update_profile(
     let mut updates = Vec::new();
     let mut bindings: Vec<String> = Vec::new();
     
-    if let Some(display_name) = req.display_name {
+    if let Some(ref display_name) = req.display_name {
         updates.push("display_name = ?");
-        bindings.push(display_name);
+        bindings.push(display_name.clone());
     }
     
-    if let Some(nip05) = req.nip05_identifier {
+    if let Some(ref nip05) = req.nip05_identifier {
         updates.push("nip05_identifier = ?");
         bindings.push(if nip05.is_empty() { 
             "NULL".to_string() 
@@ -228,36 +234,19 @@ pub async fn update_profile(
         });
     }
     
-    // Handle metadata fields (avatar_url, bio)
-    let mut metadata = user.metadata
-        .clone()
-        .and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    
-    let mut metadata_updated = false;
-    
+    // Handle avatar_url update
     if let Some(avatar_url) = req.avatar_url {
-        if avatar_url.is_empty() {
-            metadata.as_object_mut().unwrap().remove("avatar_url");
-        } else {
-            metadata["avatar_url"] = serde_json::Value::String(avatar_url);
-        }
-        metadata_updated = true;
+        updates.push("profile_picture_url = ?");
+        bindings.push(if avatar_url.is_empty() { 
+            "NULL".to_string() 
+        } else { 
+            avatar_url 
+        });
     }
     
-    if let Some(bio) = req.bio {
-        if bio.is_empty() {
-            metadata.as_object_mut().unwrap().remove("bio");
-        } else {
-            metadata["bio"] = serde_json::Value::String(bio);
-        }
-        metadata_updated = true;
-    }
-    
-    if metadata_updated {
-        updates.push("metadata = ?");
-        bindings.push(serde_json::to_string(&metadata)
-            .map_err(|e| ApiError::internal(format!("Failed to serialize metadata: {}", e)))?);
+    // TODO: Add bio field to database if needed
+    if let Some(_bio) = req.bio {
+        // Bio field not yet supported in database
     }
     
     if updates.is_empty() {
@@ -291,9 +280,7 @@ pub async fn update_profile(
         bind_idx += 1;
     }
     
-    if metadata_updated {
-        query_builder = query_builder.bind(&bindings[bind_idx]);
-    }
+    // Metadata no longer stored in database
     
     query_builder = query_builder.bind(&user.id);
     
