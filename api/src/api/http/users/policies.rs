@@ -210,6 +210,7 @@ pub async fn create_policy(
         };
         
         // Link permission to policy
+        let permission_data_str = perm_req.permission_data.to_string();
         sqlx::query!(
             r#"
             INSERT INTO policy_permissions (policy_id, permission_id, permission_data, created_at, updated_at)
@@ -217,7 +218,7 @@ pub async fn create_policy(
             "#,
             policy_id,
             permission_id,
-            perm_req.permission_data.to_string()
+            permission_data_str
         )
         .execute(&mut *tx)
         .await
@@ -481,6 +482,7 @@ pub async fn add_permission(
     };
     
     // Add permission to policy
+    let permission_data_str = req.permission_data.to_string();
     sqlx::query!(
         r#"
         INSERT INTO policy_permissions (policy_id, permission_id, permission_data, created_at, updated_at)
@@ -488,7 +490,7 @@ pub async fn add_permission(
         "#,
         policy_id,
         permission_id,
-        req.permission_data.to_string()
+        permission_data_str
     )
     .execute(&pool)
     .await

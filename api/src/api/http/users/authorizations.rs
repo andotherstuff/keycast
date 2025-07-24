@@ -264,6 +264,11 @@ pub async fn create_authorization(
         .map_err(|e| ApiError::internal(format!("Failed to serialize relays: {}", e)))?;
     
     // Create authorization
+    let policy_id = req.policy_id as i32;
+    let max_uses = req.max_uses.map(|u| u as i32);
+    let expires_at_naive = expires_at.map(|dt| dt.naive_utc());
+    let application_id = req.application_id as i32;
+    
     let auth_id = sqlx::query!(
         r#"
         INSERT INTO authorizations (
@@ -285,12 +290,12 @@ pub async fn create_authorization(
         bunker_public_key,
         encrypted_bunker_secret,
         relays_json,
-        req.policy_id as i32,
-        req.max_uses.map(|u| u as i32),
-        expires_at.map(|dt| dt.naive_utc()),
+        policy_id,
+        max_uses,
+        expires_at_naive,
         user.id,
         req.user_key_id,
-        req.application_id as i32,
+        application_id,
     )
     .fetch_one(&pool)
     .await
