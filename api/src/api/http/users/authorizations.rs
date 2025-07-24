@@ -239,8 +239,9 @@ pub async fn create_authorization(
     let bunker_secret = bunker_keys.secret_key().as_secret_bytes();
     
     // Encrypt bunker secret
-    use keycast_core::encryption::MasterKeyManager;
-    let key_manager = MasterKeyManager::new();
+    use keycast_core::encryption::file_key_manager::FileKeyManager;
+    let key_manager = FileKeyManager::new()
+        .map_err(|e| ApiError::internal(format!("Failed to create key manager: {}", e)))?;
     let encrypted_bunker_secret = key_manager.encrypt(bunker_secret).await
         .map_err(|e| ApiError::internal(format!("Failed to encrypt bunker secret: {}", e)))?;
     

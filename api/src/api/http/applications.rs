@@ -1,7 +1,9 @@
 // ABOUTME: Application management API endpoints for listing, viewing, and managing applications
 // ABOUTME: Includes both user-specific app management and public app discovery endpoints
 
-use crate::api::http::auth::Protected;
+use crate::api::http::auth::get_user_from_session;
+use crate::api::error::ApiError;
+use axum::http::HeaderMap;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -9,7 +11,7 @@ use axum::{
     routing::{delete, get, put},
     Router,
 };
-use keycast_core::types::Application;
+use keycast_core::types::application::Application;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -81,7 +83,7 @@ async fn list_applications(
     let offset = ((params.page - 1) * params.per_page) as i64;
     let limit = params.per_page as i64;
     
-    let applications = Application::list_all(pool, Some(limit), Some(offset))
+    let applications = Application::list_all(&pool, Some(limit), Some(offset))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
@@ -89,16 +91,16 @@ async fn list_applications(
         "SELECT COUNT(*) FROM applications WHERE (? = false OR is_verified = true)"
     )
     .bind(params.verified_only)
-    .fetch_one(pool)
+    .fetch_one(&pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .unwrap_or(0) as u64;
+ as u64;
     
     let app_infos: Vec<ApplicationInfo> = applications
         .into_iter()
         .filter(|app| !params.verified_only || app.is_verified)
         .map(|app| ApplicationInfo {
-            id: app.id,
+            id: Uuid::from_u128(app.id as u128),
             name: app.name,
             domain: app.domain,
             description: app.description,
@@ -120,14 +122,15 @@ async fn get_application(
     State(pool): State<SqlitePool>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
+    // Convert UUID to u32 (applications table uses INTEGER id)
+    let app_id = id.as_u128() as u32;
     
-    let app = Application::find_by_id(pool, id)
+    let app = Application::find_by_id(&pool, app_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| StatusCode::NOT_FOUND)?;
     
     Ok(Json(ApplicationInfo {
-        id: app.id,
+        id: Uuid::from_u128(app.id as u128),
         name: app.name,
         domain: app.domain,
         description: app.description,
@@ -139,26 +142,30 @@ async fn get_application(
 
 // User-specific endpoints
 
+#[derive(sqlx::FromRow)]
+struct UserAppRow {
+    id: String,
+    name: String,
+    domain: String,
+    description: Option<String>,
+    icon_url: Option<String>,
+    is_verified: bool,
+    first_seen_at: chrono::DateTime<chrono::Utc>,
+    last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    active_authorizations: Option<i64>,
+    total_requests: Option<i64>,
+}
+
 async fn list_user_applications(
     State(pool): State<SqlitePool>,
-    Protected(user_id): Protected,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<UserApplicationInfo>>, StatusCode> {
+    let user = get_user_from_session(&pool, &headers)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let user_id = user.id;
     
     // Get all applications that have authorizations for this user
-    #[derive(sqlx::FromRow)]
-    struct UserAppRow {
-        id: String,
-        name: String,
-        domain: String,
-        description: Option<String>,
-        icon_url: Option<String>,
-        is_verified: bool,
-        first_seen_at: chrono::DateTime<chrono::Utc>,
-        last_used_at: Option<chrono::DateTime<chrono::Utc>>,
-        active_authorizations: Option<i64>,
-        total_requests: Option<i64>,
-    }
-    
     let user_apps = sqlx::query_as::<_, UserAppRow>(
         r#"
         SELECT DISTINCT
@@ -173,8 +180,8 @@ async fn list_user_applications(
             COUNT(auth.id) as active_authorizations,
             COUNT(ar.id) as total_requests
         FROM applications a
-        INNER JOIN authorizations auth ON auth.app_id = a.id
-        LEFT JOIN authorization_requests ar ON ar.app_id = a.id AND ar.user_id = ?
+        INNER JOIN authorizations auth ON auth.application_id = a.id
+        LEFT JOIN authorization_requests ar ON ar.application_id = a.id AND ar.user_id = ?
         WHERE auth.user_id = ? AND auth.revoked_at IS NULL
         GROUP BY a.id
         ORDER BY a.last_used_at DESC NULLS LAST
@@ -182,7 +189,7 @@ async fn list_user_applications(
     )
     .bind(user_id.to_string())
     .bind(user_id.to_string())
-    .fetch_all(pool)
+    .fetch_all(&pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
@@ -209,9 +216,13 @@ async fn list_user_applications(
 
 async fn get_user_application(
     State(pool): State<SqlitePool>,
-    Protected(user_id): Protected,
+    headers: HeaderMap,
     Path(app_id): Path<Uuid>,
 ) -> Result<Json<UserApplicationInfo>, StatusCode> {
+    let user = get_user_from_session(&pool, &headers)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let user_id = user.id;
     
     // Check if user has any authorizations for this app
     let user_app = sqlx::query_as::<_, UserAppRow>(
@@ -228,8 +239,8 @@ async fn get_user_application(
             COUNT(auth.id) as active_authorizations,
             COUNT(ar.id) as total_requests
         FROM applications a
-        INNER JOIN authorizations auth ON auth.app_id = a.id
-        LEFT JOIN authorization_requests ar ON ar.app_id = a.id AND ar.user_id = ?
+        INNER JOIN authorizations auth ON auth.application_id = a.id
+        LEFT JOIN authorization_requests ar ON ar.application_id = a.id AND ar.user_id = ?
         WHERE a.id = ? AND auth.user_id = ? AND auth.revoked_at IS NULL
         GROUP BY a.id
         "#
@@ -237,7 +248,7 @@ async fn get_user_application(
     .bind(user_id.to_string())
     .bind(app_id.to_string())
     .bind(user_id.to_string())
-    .fetch_optional(pool)
+    .fetch_optional(&pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .ok_or(StatusCode::NOT_FOUND)?;
@@ -260,21 +271,25 @@ async fn get_user_application(
 
 async fn revoke_app_authorizations(
     State(pool): State<SqlitePool>,
-    Protected(user_id): Protected,
+    headers: HeaderMap,
     Path(app_id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
+    let user = get_user_from_session(&pool, &headers)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let user_id = user.id;
     
     // Revoke all active authorizations for this app
     let result = sqlx::query(
         r#"
         UPDATE authorizations 
         SET revoked_at = datetime('now') 
-        WHERE user_id = ? AND app_id = ? AND revoked_at IS NULL
+        WHERE user_id = ? AND application_id = ? AND revoked_at IS NULL
         "#
     )
     .bind(user_id.to_string())
     .bind(app_id.to_string())
-    .execute(pool)
+    .execute(&pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
@@ -298,12 +313,14 @@ async fn verify_application(
     Json(req): Json<VerifyApplicationRequest>,
 ) -> Result<StatusCode, StatusCode> {
     
-    let mut app = Application::find_by_id(pool, id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    // Convert UUID to i32 (applications table uses INTEGER id)
+    let app_id = id.as_u128() as u32;
     
-    app.set_verified(pool, req.verified)
+    let mut app = Application::find_by_id(&pool, app_id)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    
+    app.set_verified(&pool, req.verified)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
@@ -513,7 +530,7 @@ mod tests {
                 a.domain,
                 COUNT(auth.id) as active_authorizations
             FROM applications a
-            INNER JOIN authorizations auth ON auth.app_id = a.id
+            INNER JOIN authorizations auth ON auth.application_id = a.id
             WHERE auth.user_id = ? AND auth.revoked_at IS NULL
             GROUP BY a.id
             "#
@@ -557,7 +574,7 @@ mod tests {
             r#"
             UPDATE authorizations 
             SET revoked_at = datetime('now') 
-            WHERE user_id = ? AND app_id = ? AND revoked_at IS NULL
+            WHERE user_id = ? AND application_id = ? AND revoked_at IS NULL
             "#
         )
         .bind(user_id.to_string())
@@ -573,7 +590,7 @@ mod tests {
             r#"
             SELECT COUNT(*) 
             FROM authorizations 
-            WHERE user_id = ? AND app_id = ? AND revoked_at IS NULL
+            WHERE user_id = ? AND application_id = ? AND revoked_at IS NULL
             "#
         )
         .bind(user_id.to_string())

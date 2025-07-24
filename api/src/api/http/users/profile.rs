@@ -14,7 +14,7 @@ use crate::api::error::ApiError;
 use crate::api::http::auth::get_user_from_session;
 use keycast_core::types::{
     user_enhanced::UserEnhanced,
-    user_auth::UserAuth,
+    user_auth::UserAuthMethod,
     user_key::UserKey,
 };
 

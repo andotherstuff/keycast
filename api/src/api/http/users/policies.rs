@@ -105,7 +105,7 @@ pub async fn list_policies(
     for policy in policies {
         let permissions = sqlx::query!(
             r#"
-            SELECT p.id, p.identifier, p.name, pp.permission_data
+            SELECT p.id, p.name, p.name as identifier, pp.permission_data
             FROM permissions p
             JOIN policy_permissions pp ON p.id = pp.permission_id
             WHERE pp.policy_id = ?
@@ -182,7 +182,7 @@ pub async fn create_policy(
         // First, find or create the permission type
         let permission = sqlx::query!(
             r#"
-            SELECT id FROM permissions WHERE identifier = ?
+            SELECT id FROM permissions WHERE name = ?
             "#,
             perm_req.identifier
         )
@@ -196,11 +196,10 @@ pub async fn create_policy(
                 // Create new permission type
                 sqlx::query!(
                     r#"
-                    INSERT INTO permissions (identifier, name, type, created_at, updated_at)
-                    VALUES (?1, ?2, 'custom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO permissions (name, type, created_at, updated_at)
+                    VALUES (?1, 'custom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     RETURNING id
                     "#,
-                    perm_req.identifier,
                     perm_req.identifier
                 )
                 .fetch_one(&mut *tx)
@@ -452,11 +451,10 @@ pub async fn add_permission(
         None => {
             sqlx::query!(
                 r#"
-                INSERT INTO permissions (identifier, name, type, created_at, updated_at)
-                VALUES (?1, ?2, 'custom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO permissions (name, type, created_at, updated_at)
+                VALUES (?1, 'custom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 RETURNING id
                 "#,
-                req.identifier,
                 req.identifier
             )
             .fetch_one(&pool)

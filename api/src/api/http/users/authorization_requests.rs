@@ -16,7 +16,7 @@ use crate::api::http::auth::get_user_from_session;
 use keycast_core::authorization_flow::{
     AuthorizationFlowService, AuthorizationRequest, AuthorizationRequestStatus,
 };
-use keycast_core::encryption::MasterKeyManager;
+use keycast_core::encryption::file_key_manager::FileKeyManager;
 
 // ============ Request/Response Types ============
 
