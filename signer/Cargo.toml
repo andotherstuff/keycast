@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "signer_daemon"
 path = "src/signer_daemon.rs"
 
+[[bin]]
+name = "signer_daemon_enhanced"
+path = "src/signer_daemon_enhanced.rs"
+
 [dependencies]
 keycast_core = { path = "../core" }
 chrono = { workspace = true }

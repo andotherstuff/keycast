@@ -104,21 +104,29 @@ impl SignerManager {
     }
 
     async fn spawn_signer_process(&mut self, auth_id: u32) -> Result<(), SignerManagerError> {
+        // Check if we should use the enhanced daemon
+        let use_enhanced = std::env::var("USE_ENHANCED_SIGNER").unwrap_or_default() == "true";
+        let daemon_name = if use_enhanced {
+            "signer_daemon_enhanced"
+        } else {
+            "signer_daemon"
+        };
+        
         // Try multiple possible locations for the binary
         let possible_paths = vec![
             // Same directory as current executable
             std::env::current_exe()?
                 .parent()
                 .ok_or(SignerManagerError::Spawn)?
-                .join("signer_daemon"),
+                .join(daemon_name),
             // Current working directory
-            std::env::current_dir()?.join("signer_daemon"),
+            std::env::current_dir()?.join(daemon_name),
             // Try with .exe extension on Windows
             #[cfg(windows)]
             std::env::current_exe()?
                 .parent()
                 .ok_or(SignerManagerError::Spawn)?
-                .join("signer_daemon.exe"),
+                .join(format!("{}.exe", daemon_name)),
         ];
 
         let binary_path = possible_paths

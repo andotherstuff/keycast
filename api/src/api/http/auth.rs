@@ -329,8 +329,8 @@ fn generate_session_token() -> String {
         .collect()
 }
 
-/// Get user from session token
-async fn get_user_from_session(
+/// Extract user from session token in Authorization header
+pub async fn get_user_from_session(
     pool: &SqlitePool,
     headers: &HeaderMap,
 ) -> Result<UserEnhanced, ApiError> {
@@ -338,8 +338,9 @@ async fn get_user_from_session(
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::auth("Missing session token"))?;
+        .ok_or_else(|| ApiError::auth("Missing or invalid authorization header"))?;
     
+    // Get user from session
     let user_id = sqlx::query_scalar::<_, String>(
         r#"
         SELECT user_id FROM user_sessions 
@@ -351,10 +352,12 @@ async fn get_user_from_session(
     .await?
     .ok_or_else(|| ApiError::auth("Invalid or expired session"))?;
     
-    UserEnhanced::find_by_id(pool, &user_id)
+    let user = UserEnhanced::find_by_id(pool, &user_id)
         .await
         .map_err(|_| ApiError::internal("Database error"))?
-        .ok_or_else(|| ApiError::not_found("User not found"))
+        .ok_or_else(|| ApiError::not_found("User not found"))?;
+    
+    Ok(user)
 }
 
 /// Log user activity

@@ -85,3 +85,9 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+impl From<crate::state::StateError> for ApiError {
+    fn from(err: crate::state::StateError) -> Self {
+        ApiError::Internal(err.to_string())
+    }
+}

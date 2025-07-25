@@ -6,7 +6,8 @@ use axum::{
 };
 use sqlx::SqlitePool;
 
-use crate::api::http::{auth, nip05, teams};
+use crate::api::http::{applications, auth, nip05, teams, users};
+use crate::api::http::users::authorization_requests;
 
 pub fn routes(pool: SqlitePool) -> Router {
     tracing::debug!("Building routes");
@@ -21,6 +22,7 @@ pub fn routes(pool: SqlitePool) -> Router {
         .route("/auth/passkey/login", post(auth::login_passkey))
         .route("/auth/oauth/:provider", get(auth::oauth_init))
         .route("/auth/oauth/:provider/callback", get(auth::oauth_callback))
+        .nest("/auth/requests", authorization_requests::routes())
         .with_state(pool.clone());
     
     // Protected routes (require auth middleware)
@@ -49,9 +51,21 @@ pub fn routes(pool: SqlitePool) -> Router {
     // NIP-05 routes (includes both public and protected endpoints)
     let nip05_routes = nip05::routes(pool.clone());
     
+    // User routes (protected by session auth)
+    let user_routes = Router::new()
+        .nest("/users", users::routes())
+        .with_state(pool.clone());
+    
+    // Application routes (public and protected)
+    let app_routes = Router::new()
+        .nest("/applications", applications::routes())
+        .with_state(pool.clone());
+    
     // Combine routes
     Router::new()
         .merge(auth_routes)
         .merge(protected_routes)
         .merge(nip05_routes)
+        .merge(user_routes)
+        .merge(app_routes)
 }

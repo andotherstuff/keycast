@@ -1,4 +1,5 @@
 pub mod authorization;
+pub mod authorization_enhanced;
 pub mod permission;
 pub mod policy;
 pub mod stored_key;

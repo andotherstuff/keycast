@@ -1,7 +1,9 @@
+pub mod applications;
 pub mod auth;
 pub mod nip05;
 pub mod routes;
 pub mod teams;
+pub mod users;
 
 use axum::{body::Body, http::Request, middleware::Next, response::Response};
 pub use routes::*;
