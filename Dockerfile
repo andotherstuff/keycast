@@ -1,11 +1,18 @@
 # Build stage for Rust API
 FROM rustlang/rust:nightly-slim AS rust-builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY ./api ./api
 COPY ./signer ./signer
 COPY ./core ./core
-COPY ./Cargo.* .
-COPY ./Cargo.lock .
+COPY ./Cargo.toml ./Cargo.toml
+COPY ./Cargo.lock ./Cargo.lock
+
 RUN cargo build --release
 
 # Build stage for Bun frontend
@@ -36,7 +43,6 @@ ENV LC_ALL=C.UTF-8
 WORKDIR /app
 COPY ./web .
 COPY ./scripts ./scripts
-COPY master.key .
 
 # Install dependencies and build
 RUN bun install
@@ -77,10 +83,12 @@ RUN mkdir -p /app/database
 COPY --from=rust-builder /app/target/release/keycast_api ./
 COPY --from=rust-builder /app/target/release/keycast_signer ./
 COPY --from=rust-builder /app/target/release/signer_daemon ./
-COPY --from=web-builder /app/master.key ./
 COPY --from=web-builder /app/build ./web
 COPY --from=web-builder /app/package.json ./
 COPY --from=web-builder /app/node_modules ./node_modules
+
+# Copy database migrations
+COPY ./database ./database
 
 # Set environment variables
 ENV NODE_ENV=production \

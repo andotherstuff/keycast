@@ -8,3 +8,7 @@ master.key
 .env
 .env.*
 !.env.example
+
+# Service account credentials
+*service-account*.json
+credentials.json

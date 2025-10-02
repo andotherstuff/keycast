@@ -5,12 +5,40 @@ use axum::{
     Router,
 };
 use sqlx::SqlitePool;
+use std::sync::Arc;
 
-use crate::api::http::teams;
+use crate::api::http::{auth, teams};
+use crate::state::{get_keycast_state, KeycastState};
+
+// State wrapper to pass state to auth handlers
+#[derive(Clone)]
+pub struct AuthState {
+    pub state: Arc<KeycastState>,
+}
 
 pub fn routes(pool: SqlitePool) -> Router {
     tracing::debug!("Building routes");
-    Router::new()
+
+    // Get keycast state
+    let state = get_keycast_state().expect("KeycastState not initialized");
+
+    let auth_state = AuthState {
+        state: Arc::clone(state),
+    };
+
+    // Public auth routes (no authentication required)
+    let auth_routes = Router::new()
+        .route("/auth/register", post(auth::register))
+        .route("/auth/login", post(auth::login))
+        .with_state(auth_state);
+
+    // Protected user routes (authentication required)
+    let user_routes = Router::new()
+        .route("/user/bunker", get(auth::get_bunker_url))
+        .with_state(pool.clone());
+
+    // Protected team routes (authentication required)
+    let team_routes = Router::new()
         .route("/teams", get(teams::list_teams))
         .route("/teams", post(teams::create_team))
         .route("/teams/:id", get(teams::get_team))
@@ -30,5 +58,11 @@ pub fn routes(pool: SqlitePool) -> Router {
         )
         .route("/teams/:id/policies", post(teams::add_policy))
         .layer(middleware::from_fn(auth_middleware))
-        .with_state(pool)
+        .with_state(pool);
+
+    // Combine routes
+    Router::new()
+        .merge(auth_routes)
+        .merge(user_routes)
+        .merge(team_routes)
 }

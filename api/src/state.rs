@@ -32,3 +32,9 @@ pub fn get_key_manager() -> Result<&'static dyn KeyManager, StateError> {
         .map(|state| state.key_manager.as_ref())
         .ok_or(StateError::KeyManagerNotInitialized)
 }
+
+pub fn get_keycast_state() -> Result<&'static Arc<KeycastState>, StateError> {
+    KEYCAST_STATE
+        .get()
+        .ok_or(StateError::DatabaseNotInitialized)
+}

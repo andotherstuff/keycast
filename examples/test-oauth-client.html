@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast OAuth Test Client</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 {
+            color: #bb86fc;
+        }
+        .section {
+            background: #2a2a2a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+        }
+        input, button {
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border: 1px solid #4a4a4a;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        button {
+            background: #bb86fc;
+            color: #000;
+            font-weight: 600;
+            cursor: pointer;
+            width: auto;
+            padding: 12px 24px;
+        }
+        button:hover {
+            background: #cb96fc;
+        }
+        button:disabled {
+            background: #555;
+            color: #888;
+            cursor: not-allowed;
+        }
+        .output {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #4a4a4a;
+            margin-top: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .success {
+            color: #03dac6;
+        }
+        .error {
+            color: #cf6679;
+        }
+        .info {
+            color: #03a9f4;
+        }
+        .label {
+            font-weight: 600;
+            color: #bb86fc;
+            display: block;
+            margin-top: 12px;
+        }
+        .bunker-url {
+            background: #2d2d2d;
+            padding: 12px;
+            border-radius: 4px;
+            margin-top: 10px;
+            border-left: 4px solid #03dac6;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔐 Keycast OAuth Test Client</h1>
+    <p>Test client for creating users and getting their NIP-46 bunker URLs</p>
+
+    <div class="section">
+        <h2>Configuration</h2>
+        <label class="label" for="apiUrl">API URL:</label>
+        <input type="text" id="apiUrl" value="http://localhost:3000" placeholder="http://localhost:3000">
+        <small style="color: #888;">Change to https://oauth.divine.video for production</small>
+    </div>
+
+    <div class="section">
+        <h2>1. Register & Auto-Login</h2>
+        <label class="label" for="email">Email:</label>
+        <input type="email" id="email" placeholder="test@example.com">
+
+        <label class="label" for="password">Password:</label>
+        <input type="password" id="password" placeholder="Your secure password">
+
+        <button id="registerBtn" onclick="registerUser()">Create User</button>
+
+        <div id="registerOutput" class="output" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h2>Or: Manual Login</h2>
+        <p style="color: #888; font-size: 14px;">Only needed if you're logging in with an existing account</p>
+        <label class="label" for="loginEmail">Email:</label>
+        <input type="email" id="loginEmail" placeholder="test@example.com">
+
+        <label class="label" for="loginPassword">Password:</label>
+        <input type="password" id="loginPassword" placeholder="Your password">
+
+        <button id="loginBtn" onclick="loginUser()">Login</button>
+
+        <div id="loginOutput" class="output" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h2>2. Get Bunker URL</h2>
+        <p>After registration (auto-login) or manual login, get your NIP-46 bunker URL to use with Nostr clients</p>
+        <button id="bunkerBtn" onclick="getBunkerUrl()" disabled>Get Bunker URL</button>
+
+        <div id="bunkerOutput" class="output" style="display: none;"></div>
+    </div>
+
+    <script>
+        let authToken = null;
+        let userPubkey = null;
+
+        function getApiUrl() {
+            return document.getElementById('apiUrl').value;
+        }
+
+        function log(elementId, message, type = 'info') {
+            const output = document.getElementById(elementId);
+            output.style.display = 'block';
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'success' ? 'success' : type === 'error' ? 'error' : 'info';
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+        }
+
+        function clearLog(elementId) {
+            const output = document.getElementById(elementId);
+            output.innerHTML = '';
+        }
+
+        async function registerUser() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            if (!email || !password) {
+                alert('Please enter both email and password');
+                return;
+            }
+
+            clearLog('registerOutput');
+            log('registerOutput', 'Creating new user...', 'info');
+
+            try {
+                const response = await fetch(`${getApiUrl()}/api/auth/register`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                log('registerOutput', `✓ User created successfully!`, 'success');
+                log('registerOutput', `Email: ${email}`, 'info');
+                log('registerOutput', `User ID: ${data.user_id || 'N/A'}`, 'info');
+
+                // Store token and enable bunker URL button (auto-login)
+                if (data.token) {
+                    authToken = data.token;
+                    userPubkey = data.pubkey;
+                    document.getElementById('bunkerBtn').disabled = false;
+                    log('registerOutput', `Token: ${data.token.substring(0, 20)}...`, 'info');
+                    log('registerOutput', '\n✓ Automatically logged in! You can now get your bunker URL', 'success');
+                } else {
+                    // Fallback: Auto-fill login form
+                    document.getElementById('loginEmail').value = email;
+                    document.getElementById('loginPassword').value = password;
+                    log('registerOutput', '\nℹ️  Now login to get your bunker URL', 'info');
+                }
+
+            } catch (error) {
+                log('registerOutput', `✗ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function loginUser() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!email || !password) {
+                alert('Please enter both email and password');
+                return;
+            }
+
+            clearLog('loginOutput');
+            log('loginOutput', 'Logging in...', 'info');
+
+            try {
+                const response = await fetch(`${getApiUrl()}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                log('loginOutput', `✓ Login successful!`, 'success');
+                log('loginOutput', `Token: ${data.token?.substring(0, 20)}...`, 'info');
+
+                authToken = data.token;
+                userPubkey = data.pubkey;
+
+                // Enable bunker button
+                document.getElementById('bunkerBtn').disabled = false;
+
+                log('loginOutput', '\nℹ️  You can now get your bunker URL', 'success');
+
+            } catch (error) {
+                log('loginOutput', `✗ Error: ${error.message}`, 'error');
+                authToken = null;
+                userPubkey = null;
+                document.getElementById('bunkerBtn').disabled = true;
+            }
+        }
+
+        async function getBunkerUrl() {
+            if (!authToken) {
+                alert('Please login first');
+                return;
+            }
+
+            clearLog('bunkerOutput');
+            log('bunkerOutput', 'Fetching bunker URL...', 'info');
+
+            try {
+                const response = await fetch(`${getApiUrl()}/api/user/bunker`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                log('bunkerOutput', `✓ Bunker URL retrieved!`, 'success');
+                log('bunkerOutput', '\n📋 NIP-46 Bunker URL:', 'success');
+
+                const bunkerUrl = data.bunker_url || data.url || 'bunker://[URL not available in response]';
+                const bunkerDiv = document.createElement('div');
+                bunkerDiv.className = 'bunker-url';
+                bunkerDiv.textContent = bunkerUrl;
+                document.getElementById('bunkerOutput').appendChild(bunkerDiv);
+
+                log('bunkerOutput', '\nℹ️  Use this URL with NIP-46 compatible Nostr clients', 'info');
+                log('bunkerOutput', 'ℹ️  Copy the URL above and paste it into your Nostr client settings', 'info');
+
+            } catch (error) {
+                log('bunkerOutput', `✗ Error: ${error.message}`, 'error');
+
+                // Fallback: construct bunker URL if we have the pubkey
+                if (userPubkey) {
+                    log('bunkerOutput', '\n⚠️  Constructing bunker URL from available data:', 'info');
+                    const apiHost = new URL(getApiUrl()).hostname;
+                    const bunkerUrl = `bunker://${userPubkey}?relay=wss://relay.example.com`;
+
+                    const bunkerDiv = document.createElement('div');
+                    bunkerDiv.className = 'bunker-url';
+                    bunkerDiv.textContent = bunkerUrl;
+                    document.getElementById('bunkerOutput').appendChild(bunkerDiv);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+steps:
+  # Build the Docker image with correct build args
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'VITE_DOMAIN=https://oauth.divine.video'
+      - '--build-arg'
+      - 'VITE_ALLOWED_PUBKEYS='
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
+      - '.'
+    timeout: 1200s
+
+  # Push the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
+
+  # Deploy to Cloud Run - NO COMMAND OVERRIDE
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'keycast-oauth'
+      - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=3000'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--timeout=300'
+      - '--set-env-vars'
+      - 'NODE_ENV=production,RUST_LOG=info,WEB_BUILD_DIR=/app/web,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID},CORS_ALLOWED_ORIGIN=https://oauth.divine.video,APP_URL=https://oauth.divine.video,FROM_EMAIL=noreply@oauth.divine.video'
+      - '--update-secrets'
+      - 'MASTER_KEY_PATH=keycast-master-key:latest,SENDGRID_API_KEY=keycast-sendgrid-api-key:latest,JWT_SECRET=keycast-jwt-secret:latest'
+
+  # Smoke tests - verify deployment
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo "⏳ Waiting for service to be ready..."
+        sleep 45
+
+        echo "🔍 Testing API health endpoint..."
+        if ! curl -f -s https://oauth.divine.video/health; then
+          echo "❌ Health check failed"
+          exit 1
+        fi
+        echo "✅ Health check passed"
+
+        echo "🔍 Testing CORS preflight for /api/auth/register..."
+        HTTP_CODE=$$(curl -s -o /dev/null -w "%{http_code}" \
+          -H "Origin: https://oauth.divine.video" \
+          -H "Access-Control-Request-Method: POST" \
+          -H "Access-Control-Request-Headers: Content-Type" \
+          -X OPTIONS \
+          https://oauth.divine.video/api/auth/register)
+
+        if [ "$$HTTP_CODE" != "200" ]; then
+          echo "❌ CORS preflight failed with HTTP $$HTTP_CODE"
+          exit 1
+        fi
+        echo "✅ CORS preflight passed"
+
+        echo "🎉 All smoke tests passed!"
+
+images:
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 2400s

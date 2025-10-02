@@ -28,11 +28,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load environment variables
     dotenv().ok();
 
-    // Initialize tracing with debug level
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Initialize tracing with JSON format for production
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let is_production = env::var("NODE_ENV").unwrap_or_default() == "production"
+        || env::var("RUST_ENV").unwrap_or_default() == "production";
+
+    if is_production {
+        // JSON logging for production (Cloud Logging compatibility)
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_current_span(true)
+                    .with_span_list(true)
+            )
+            .init();
+        eprintln!("✔︎ Structured JSON logging enabled (production mode)");
+    } else {
+        // Human-readable logging for development
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+        println!("✔︎ Human-readable logging enabled (development mode)");
+    }
 
     // Setup shutdown signal handler
     tokio::spawn(async {
@@ -95,11 +118,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set(state)
         .map_err(|_| "Failed to set KeycastState")?;
 
-    // Start up the API
+    // Start up the API with permissive CORS for embeddable auth flows
     let cors = CorsLayer::new()
-        .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
+        .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .allow_credentials(false);
+
+    println!("✔︎ CORS configured to allow all origins (embeddable auth)");
 
     let app = Router::new()
         .route("/health", get(health_check))
