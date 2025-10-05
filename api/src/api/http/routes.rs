@@ -7,8 +7,8 @@ use axum::{
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-use crate::api::http::{auth, teams};
-use crate::state::{get_keycast_state, KeycastState};
+use crate::api::http::{auth, oauth, teams};
+use crate::state::KeycastState;
 
 // State wrapper to pass state to auth handlers
 #[derive(Clone)]
@@ -16,20 +16,25 @@ pub struct AuthState {
     pub state: Arc<KeycastState>,
 }
 
-pub fn routes(pool: SqlitePool) -> Router {
+/// Build routes with explicit state - the proper way to structure an Axum app
+pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
     tracing::debug!("Building routes");
 
-    // Get keycast state
-    let state = get_keycast_state().expect("KeycastState not initialized");
-
     let auth_state = AuthState {
-        state: Arc::clone(state),
+        state,
     };
 
     // Public auth routes (no authentication required)
     let auth_routes = Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
+        .with_state(auth_state.clone());
+
+    // OAuth routes (no authentication required for initial authorize request)
+    let oauth_routes = Router::new()
+        .route("/oauth/authorize", get(oauth::authorize_get))
+        .route("/oauth/authorize", post(oauth::authorize_post))
+        .route("/oauth/token", post(oauth::token))
         .with_state(auth_state);
 
     // Protected user routes (authentication required)
@@ -63,6 +68,7 @@ pub fn routes(pool: SqlitePool) -> Router {
     // Combine routes
     Router::new()
         .merge(auth_routes)
+        .merge(oauth_routes)
         .merge(user_routes)
         .merge(team_routes)
 }

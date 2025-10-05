@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .nest("/api", api::http::routes(get_db_pool().unwrap().clone()))
+        .nest("/api", api::http::routes(get_db_pool().unwrap().clone(), KEYCAST_STATE.get().unwrap().clone()))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 

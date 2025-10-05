@@ -1628,6 +1628,9 @@ dependencies = [
  "chrono",
  "config",
  "dotenv",
+ "hex",
+ "http-body-util",
+ "hyper",
  "jsonwebtoken",
  "keycast_core",
  "nostr",
@@ -1640,10 +1643,12 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.9",
  "tokio",
+ "tower 0.5.2",
  "tower-http",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "urlencoding",
  "uuid",
 ]
 

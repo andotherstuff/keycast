@@ -1,4 +1,5 @@
 use keycast_core::types::authorization::{Authorization, AuthorizationError};
+use keycast_core::types::oauth_authorization::OAuthAuthorization;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,12 +23,24 @@ pub enum SignerManagerError {
     SigningDaemonBinary,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AuthorizationType {
+    Regular,
+    OAuth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AuthorizationKey {
+    pub id: u32,
+    pub auth_type: AuthorizationType,
+}
+
 #[derive(Debug, Clone)]
 pub struct SignerManager {
     database_url: String,
     pub pool: SqlitePool,
     process_check_interval_seconds: u64,
-    signer_processes: Arc<Mutex<HashMap<u32, Child>>>, // auth_id -> process id
+    signer_processes: Arc<Mutex<HashMap<AuthorizationKey, Child>>>, // (auth_id, type) -> process
 }
 
 impl SignerManager {
@@ -45,24 +58,53 @@ impl SignerManager {
     }
 
     pub async fn run(&mut self) -> Result<(), SignerManagerError> {
-        // Get all authorizations, including expired ones so we can provide user feedback
-        let authorization_ids = Authorization::all_ids(&self.pool).await?;
+        // Get all regular authorizations
+        let regular_auth_ids = Authorization::all_ids(&self.pool).await?;
+        // Get all OAuth authorizations
+        let oauth_auth_ids = OAuthAuthorization::all_ids(&self.pool).await?;
 
         tracing::debug!(
             target: "keycast_signer::signer_manager",
-            "Starting signer processes for {} authorizations",
-            authorization_ids.len()
+            "Starting signer processes for {} regular + {} OAuth authorizations",
+            regular_auth_ids.len(),
+            oauth_auth_ids.len()
         );
 
         let mut failed = Vec::new();
-        for auth_id in &authorization_ids {
-            match self.spawn_signer_process(*auth_id).await {
+
+        // Spawn regular authorization processes
+        for auth_id in &regular_auth_ids {
+            let key = AuthorizationKey {
+                id: *auth_id,
+                auth_type: AuthorizationType::Regular,
+            };
+            match self.spawn_signer_process(key.clone()).await {
                 Ok(_) => (),
                 Err(e) => {
-                    failed.push(*auth_id);
+                    failed.push(key);
                     tracing::error!(
                         target: "keycast_signer::signer_manager",
-                        "Failed to start signer process for authorization {}: {}",
+                        "Failed to start regular signer process for authorization {}: {}",
+                        auth_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        // Spawn OAuth authorization processes
+        for auth_id in &oauth_auth_ids {
+            let key = AuthorizationKey {
+                id: *auth_id,
+                auth_type: AuthorizationType::OAuth,
+            };
+            match self.spawn_signer_process(key.clone()).await {
+                Ok(_) => (),
+                Err(e) => {
+                    failed.push(key);
+                    tracing::error!(
+                        target: "keycast_signer::signer_manager",
+                        "Failed to start OAuth signer process for authorization {}: {}",
                         auth_id,
                         e
                     );
@@ -72,7 +114,7 @@ impl SignerManager {
 
         tracing::debug!(
             "Started signer processes for {} authorizations",
-            authorization_ids.len()
+            regular_auth_ids.len() + oauth_auth_ids.len()
         );
         if !failed.is_empty() {
             tracing::warn!(
@@ -96,14 +138,14 @@ impl SignerManager {
 
     /// Shutdown all signer processes
     pub async fn shutdown(&mut self) -> Result<(), SignerManagerError> {
-        let auth_ids: Vec<u32> = self.signer_processes.lock().await.keys().cloned().collect();
-        for auth_id in auth_ids {
-            self.shutdown_signer_process(&auth_id).await?;
+        let auth_keys: Vec<AuthorizationKey> = self.signer_processes.lock().await.keys().cloned().collect();
+        for auth_key in auth_keys {
+            self.shutdown_signer_process(&auth_key).await?;
         }
         Ok(())
     }
 
-    async fn spawn_signer_process(&mut self, auth_id: u32) -> Result<(), SignerManagerError> {
+    async fn spawn_signer_process(&mut self, auth_key: AuthorizationKey) -> Result<(), SignerManagerError> {
         // Try multiple possible locations for the binary
         let possible_paths = vec![
             // Same directory as current executable
@@ -126,10 +168,16 @@ impl SignerManager {
             .find(|path| path.exists())
             .ok_or(SignerManagerError::SigningDaemonBinary)?;
 
+        let auth_type_str = match auth_key.auth_type {
+            AuthorizationType::Regular => "regular",
+            AuthorizationType::OAuth => "oauth",
+        };
+
         tracing::info!(
             target: "keycast_signer::signer_manager",
-            "Starting signer process for authorization {} using binary at {:?}",
-            auth_id,
+            "Starting {} signer process for authorization {} using binary at {:?}",
+            auth_type_str,
+            auth_key.id,
             binary_path
         );
 
@@ -138,7 +186,8 @@ impl SignerManager {
             std::env::var("MASTER_KEY_PATH").unwrap_or_else(|_| "/app/master.key".to_string());
 
         let child = Command::new(binary_path)
-            .env("AUTH_ID", auth_id.to_string())
+            .env("AUTH_ID", auth_key.id.to_string())
+            .env("AUTH_TYPE", auth_type_str)
             .env("DATABASE_URL", self.database_url.clone())
             .env("MASTER_KEY_PATH", master_key_path)
             .spawn()
@@ -146,14 +195,14 @@ impl SignerManager {
 
         {
             let mut processes = self.signer_processes.lock().await;
-            processes.insert(auth_id, child);
+            processes.insert(auth_key, child);
         }
         Ok(())
     }
 
-    async fn shutdown_signer_process(&mut self, auth_id: &u32) -> Result<(), SignerManagerError> {
+    async fn shutdown_signer_process(&mut self, auth_key: &AuthorizationKey) -> Result<(), SignerManagerError> {
         let mut processes = self.signer_processes.lock().await;
-        if let Some(mut child) = processes.remove(auth_id) {
+        if let Some(mut child) = processes.remove(auth_key) {
             child
                 .kill()
                 .await
@@ -180,15 +229,15 @@ impl SignerManager {
     pub async fn check_and_restart_processes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // First, check for dead processes and restart them
         let mut processes = self.signer_processes.lock().await;
-        let keys_to_restart: Vec<u32> = processes
+        let keys_to_restart: Vec<AuthorizationKey> = processes
             .iter_mut()
             .filter_map(|(key, process)| {
                 match process.try_wait() {
-                    Ok(Some(_)) => Some(*key),
+                    Ok(Some(_)) => Some(key.clone()),
                     Ok(None) => None,
                     Err(e) => {
-                        tracing::error!(target: "keycast_signer::signer_manager", "Error checking process for key {}: {}", key, e);
-                        Some(*key)
+                        tracing::error!(target: "keycast_signer::signer_manager", "Error checking process for key {:?}: {}", key, e);
+                        Some(key.clone())
                     }
                 }
             })
@@ -202,7 +251,7 @@ impl SignerManager {
 
         // Restart the dead processes
         for key in keys_to_restart {
-            tracing::info!(target: "keycast_signer::signer_manager", "Restarting signer process for key: {}", key);
+            tracing::info!(target: "keycast_signer::signer_manager", "Restarting signer process for key: {:?}", key);
             self.spawn_signer_process(key).await?;
         }
 
@@ -211,35 +260,52 @@ impl SignerManager {
 
     async fn sync_with_database(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Get current authorization IDs from database
-        let db_auth_ids = Authorization::all_ids(&self.pool).await?;
+        let regular_auth_ids = Authorization::all_ids(&self.pool).await?;
+        let oauth_auth_ids = OAuthAuthorization::all_ids(&self.pool).await?;
+
+        // Convert to AuthorizationKeys
+        let mut db_auth_keys: Vec<AuthorizationKey> = Vec::new();
+        for id in regular_auth_ids {
+            db_auth_keys.push(AuthorizationKey {
+                id,
+                auth_type: AuthorizationType::Regular,
+            });
+        }
+        for id in oauth_auth_ids {
+            db_auth_keys.push(AuthorizationKey {
+                id,
+                auth_type: AuthorizationType::OAuth,
+            });
+        }
+
         let current_processes = self.signer_processes.lock().await;
 
         // Find authorizations that need new processes
-        let new_auths: Vec<u32> = db_auth_ids
+        let new_auths: Vec<AuthorizationKey> = db_auth_keys
             .iter()
-            .filter(|id| !current_processes.contains_key(id))
+            .filter(|key| !current_processes.contains_key(key))
             .cloned()
             .collect();
 
         // Find processes that need to be shut down
-        let to_remove: Vec<u32> = current_processes
+        let to_remove: Vec<AuthorizationKey> = current_processes
             .keys()
-            .filter(|id| !db_auth_ids.contains(id))
+            .filter(|key| !db_auth_keys.contains(key))
             .cloned()
             .collect();
 
         drop(current_processes);
 
         // Start new processes
-        for auth_id in new_auths {
-            tracing::info!(target: "keycast_signer::signer_manager", "Starting signer process for new authorization: {}", auth_id);
-            self.spawn_signer_process(auth_id).await?;
+        for auth_key in new_auths {
+            tracing::info!(target: "keycast_signer::signer_manager", "Starting signer process for new authorization: {:?}", auth_key);
+            self.spawn_signer_process(auth_key).await?;
         }
 
         // Shutdown removed processes
-        for auth_id in to_remove {
-            tracing::info!(target: "keycast_signer::signer_manager", "Shutting down signer process for removed authorization: {}", auth_id);
-            self.shutdown_signer_process(&auth_id).await?;
+        for auth_key in to_remove {
+            tracing::info!(target: "keycast_signer::signer_manager", "Shutting down signer process for removed authorization: {:?}", auth_key);
+            self.shutdown_signer_process(&auth_key).await?;
         }
 
         Ok(())

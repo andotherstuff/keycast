@@ -1,39 +1,34 @@
-mod signer_manager;
+// ABOUTME: Main entry point for unified NIP-46 signer daemon
+// ABOUTME: Handles all bunker URLs in a single process, routing requests to appropriate authorizations
 
-use config::{Config, File};
+use dotenv::dotenv;
 use keycast_core::database::Database;
-use nostr_connect::prelude::*;
-use signer_manager::SignerManager;
+use keycast_core::encryption::file_key_manager::FileKeyManager;
+use keycast_core::encryption::gcp_key_manager::GcpKeyManager;
+use keycast_core::encryption::KeyManager;
+use std::env;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+// Import the unified signer from signer_daemon module
+mod signer_daemon;
+use signer_daemon::UnifiedSigner;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n\n================================================");
-    println!("🔑 Keycast Signer Starting...");
+    println!("🔑 Keycast Unified Signer Starting...");
 
-    // Load config
-    let root_dir = env!("CARGO_MANIFEST_DIR");
-    let config_path = PathBuf::from(root_dir).join("config.toml");
+    dotenv().ok();
 
-    let config = Config::builder()
-        .add_source(File::from(config_path))
-        .build()
-        .unwrap();
-
-    let process_check_interval_seconds =
-        config.get::<u64>("process_check_interval_seconds").unwrap();
-
-    println!("✔︎ Config loaded");
-    println!("Process check interval: {}", process_check_interval_seconds);
-
-    // Initialize tracing with debug level
+    // Initialize tracing
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug")))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     // Set up database
+    let root_dir = env!("CARGO_MANIFEST_DIR");
     let database_url = PathBuf::from(root_dir)
         .parent()
         .unwrap()
@@ -42,47 +37,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parent()
         .unwrap()
         .join("database/migrations");
-    let database = Database::new(database_url.clone(), database_migrations.clone()).await?;
 
+    let database = Database::new(database_url.clone(), database_migrations.clone()).await?;
     println!("✔︎ Database initialized");
 
-    let mut manager = SignerManager::new(
-        database_url.to_string_lossy().to_string(),
-        database.pool.clone(),
-        process_check_interval_seconds,
-    );
-    println!("✔︎ Signer manager initialized");
+    // Setup key manager
+    let key_manager: Box<dyn KeyManager> =
+        if env::var("USE_GCP_KMS").unwrap_or_else(|_| "false".to_string()) == "true" {
+            tracing::info!("Using Google Cloud KMS for encryption");
+            Box::new(GcpKeyManager::new().await?)
+        } else {
+            tracing::info!("Using file-based encryption");
+            Box::new(FileKeyManager::new()?)
+        };
 
-    // Setup shutdown signal handler
-    let database_clone = database.clone();
-    let mut manager_clone = manager.clone();
-    tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                println!("\n\n================================================");
-                println!("🫡 Shutdown signal received, cleaning up...");
-                manager_clone
-                    .shutdown()
-                    .await
-                    .expect("Failed to shutdown signer manager");
-                println!("✔︎ Keycast Signer manager shutdown complete");
-                let pool = database_clone.pool;
-                pool.close().await;
-                println!("✔︎ Database pool closed");
-                println!("🤙 Pura Vida!");
-                println!("================================================");
-                std::process::exit(0);
-            }
-            Err(err) => {
-                eprintln!("Error: {}", err);
-                std::process::exit(1);
-            }
-        }
-    });
+    // Create and run unified signer
+    let mut signer = UnifiedSigner::new(database.pool.clone(), key_manager).await?;
+    signer.load_authorizations().await?;
+    signer.connect_to_relays().await?;
 
-    println!("🤙 Keycast Signer manager started");
-    // This will block and keep the main process running because of the process monitoring loop
-    manager.run().await?;
+    println!("🤙 Unified signer daemon ready, listening for NIP-46 requests");
+
+    signer.run().await?;
 
     Ok(())
 }
