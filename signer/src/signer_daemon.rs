@@ -157,13 +157,15 @@ impl UnifiedSigner {
         self.client.subscribe(vec![filter], None).await?;
 
         // Handle incoming events
+        let client = self.client.clone();
         self.client
             .handle_notifications(|notification| async {
                 if let RelayPoolNotification::Event { event, .. } = notification {
                     if event.kind == Kind::NostrConnect {
                         let handlers_lock = handlers.clone();
+                        let client_clone = client.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = Self::handle_nip46_request(handlers_lock, event).await {
+                            if let Err(e) = Self::handle_nip46_request(handlers_lock, client_clone, event).await {
                                 tracing::error!("Error handling NIP-46 request: {}", e);
                             }
                         });
@@ -178,6 +180,7 @@ impl UnifiedSigner {
 
     async fn handle_nip46_request(
         handlers: Arc<RwLock<HashMap<String, AuthorizationHandler>>>,
+        client: Client,
         event: Box<Event>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get the bunker pubkey from p-tag
@@ -254,8 +257,22 @@ impl UnifiedSigner {
             &response_str,
         )?;
 
-        // Send response event
-        // TODO: Build and publish response event
+        // Build and publish response event
+        tracing::debug!("Sending NIP-46 response to {}", event.pubkey);
+
+        let response_event = EventBuilder::new(
+            Kind::NostrConnect,
+            encrypted_response
+        )
+        .tags(vec![
+            Tag::public_key(event.pubkey),  // Tag the original requester
+            Tag::parse(vec!["e".to_string(), event.id.to_hex()])?,  // Reference the request event
+        ])
+        .sign(&handler.bunker_keys).await?;
+
+        client.send_event(response_event).await?;
+
+        tracing::info!("Sent NIP-46 response for request {}", event.id);
 
         Ok(())
     }
