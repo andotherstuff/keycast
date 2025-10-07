@@ -218,7 +218,7 @@
     </div>
 
     <script>
-        const NostrTools = window.NostrTools;
+        const ntools = window.NostrTools;
 
         let userData = null;
         let jwtToken = null;
@@ -343,50 +343,52 @@
                     redirect: 'manual'
                 });
 
-                // Get authorization code from redirect
+                // Get authorization code from redirect or JSON response
+                let code;
                 if (approveResponse.status >= 300 && approveResponse.status < 400) {
                     const location = approveResponse.headers.get('Location');
-                    const code = new URL(location).searchParams.get('code');
-
-                    if (!code) {
-                        throw new Error('No authorization code received');
-                    }
-
-                    showStatus('authStatus', '🔑 Authorization code received, exchanging for bunker URL...', 'info');
-
-                    // Exchange code for bunker URL
-                    const tokenResponse = await fetch(`${apiUrl}/api/oauth/token`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            code,
-                            client_id: clientId,
-                            redirect_uri: redirectUri
-                        })
-                    });
-
-                    const tokenData = await tokenResponse.json();
-                    if (!tokenResponse.ok) {
-                        throw new Error(tokenData.error || 'Token exchange failed');
-                    }
-
-                    // Extract pubkey from bunker URL
-                    const bunkerUrl = tokenData.bunker_url;
-                    const pubkeyMatch = bunkerUrl.match(/^bunker:\/\/([0-9a-f]{64})/);
-                    if (!pubkeyMatch) {
-                        throw new Error('Could not extract pubkey from bunker URL');
-                    }
-
-                    userData = {
-                        pubkey: pubkeyMatch[1],
-                        bunker_url: bunkerUrl
-                    };
-
-                    showLoggedIn();
-                    showStatus('authStatus', '✓ OAuth authorization complete! You can now post to Nostr.', 'success');
-                } else {
-                    throw new Error('OAuth authorization failed');
+                    code = new URL(location).searchParams.get('code');
+                } else if (approveResponse.status === 200) {
+                    const approveData = await approveResponse.json();
+                    code = approveData.code;
                 }
+
+                if (!code) {
+                    throw new Error('No authorization code received');
+                }
+
+                showStatus('authStatus', '🔑 Authorization code received, exchanging for bunker URL...', 'info');
+
+                // Exchange code for bunker URL
+                const tokenResponse = await fetch(`${apiUrl}/api/oauth/token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code,
+                        client_id: clientId,
+                        redirect_uri: redirectUri
+                    })
+                });
+
+                const tokenData = await tokenResponse.json();
+                if (!tokenResponse.ok) {
+                    throw new Error(tokenData.error || 'Token exchange failed');
+                }
+
+                // Extract pubkey from bunker URL
+                const bunkerUrl = tokenData.bunker_url;
+                const pubkeyMatch = bunkerUrl.match(/^bunker:\/\/([0-9a-f]{64})/);
+                if (!pubkeyMatch) {
+                    throw new Error('Could not extract pubkey from bunker URL');
+                }
+
+                userData = {
+                    pubkey: pubkeyMatch[1],
+                    bunker_url: bunkerUrl
+                };
+
+                showLoggedIn();
+                showStatus('authStatus', '✓ OAuth authorization complete! You can now post to Nostr.', 'success');
 
             } catch (error) {
                 showStatus('authStatus', `✗ OAuth error: ${error.message}`, 'error');
@@ -440,7 +442,7 @@
                 showStatus('postStatus', '🔐 Connecting to bunker...', 'info');
 
                 // Connect to relay
-                const relay = await NostrTools.Relay.connect(relayUrl);
+                const relay = await ntools.Relay.connect(relayUrl);
 
                 await relay.connect();
 
@@ -456,8 +458,8 @@
                 showStatus('postStatus', '📡 Sending signing request to bunker...', 'info');
 
                 // Create NIP-46 sign_event request
-                const requestId = NostrTools.generateSecretKey();
-                const requestIdHex = NostrTools.bytesToHex(requestId);
+                const requestId = ntools.generateSecretKey();
+                const requestIdHex = ntools.utils.bytesToHex(requestId);
 
                 const nip46Request = {
                     id: requestIdHex,
@@ -475,7 +477,7 @@
                 };
 
                 // Sign the NIP-46 request event (this is a simplification - in reality we'd use the secret)
-                const signedNip46Event = NostrTools.finalizeEvent(nip46Event, NostrTools.hexToBytes(secret.padStart(64, '0')));
+                const signedNip46Event = ntools.finalizeEvent(nip46Event, ntools.utils.hexToBytes(secret.padStart(64, '0')));
 
                 // Publish the signing request
                 await relay.publish(signedNip46Event);
@@ -537,7 +539,7 @@
                 showStatus('notesStatus', '📡 Loading notes from relay...', 'info');
 
                 const relayUrl = 'wss://relay.damus.io';
-                const relay = await NostrTools.Relay.connect(relayUrl);
+                const relay = await ntools.Relay.connect(relayUrl);
                 await relay.connect();
 
                 const notes = [];

@@ -315,7 +315,7 @@
             showStatus('registerStatus', 'Registering user...', 'info');
 
             try {
-                const response = await fetch(`${apiUrl}/auth/register`, {
+                const response = await fetch(`${apiUrl}/api/auth/register`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email, password })
@@ -367,7 +367,7 @@
             showStatus('approveStatus', 'Sending approval...', 'info');
 
             try {
-                const response = await fetch(`${apiUrl}/oauth/authorize`, {
+                const response = await fetch(`${apiUrl}/api/oauth/authorize`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -382,7 +382,7 @@
                     redirect: 'manual'
                 });
 
-                // Check for redirect (3xx status)
+                // Check for redirect (3xx status) or JSON response (200)
                 if (response.status >= 300 && response.status < 400) {
                     const location = response.headers.get('Location');
                     if (location && location.includes('code=')) {
@@ -398,6 +398,24 @@
                     } else {
                         showStatus('approveStatus',
                             `Unexpected redirect: ${location}`,
+                            'error');
+                    }
+                } else if (response.status === 200) {
+                    // Handle JSON response with code
+                    const data = await response.json();
+                    if (data.code) {
+                        authCode = data.code;
+                        showStatus('approveStatus',
+                            `✓ Authorization approved!<br>
+                            <small>Redirect URI: ${data.redirect_uri}</small><br>
+                            <small>Authorization Code: ${authCode}</small>`,
+                            'success');
+
+                        // Now exchange the code for bunker URL
+                        await exchangeCodeForBunker();
+                    } else {
+                        showStatus('approveStatus',
+                            `Unexpected response: ${JSON.stringify(data)}`,
                             'error');
                     }
                 } else {
@@ -422,7 +440,7 @@
             showStatus('approveStatus', 'Sending denial...', 'info');
 
             try {
-                const response = await fetch(`${apiUrl}/oauth/authorize`, {
+                const response = await fetch(`${apiUrl}/api/oauth/authorize`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -459,7 +477,7 @@
             showStatus('approveStatus', 'Exchanging authorization code for bunker URL...', 'info');
 
             try {
-                const response = await fetch(`${apiUrl}/oauth/token`, {
+                const response = await fetch(`${apiUrl}/api/oauth/token`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -503,7 +521,7 @@
                 showStatus('oauthStatus', `Auto-registering user: ${email}...`, 'info');
 
                 try {
-                    const response = await fetch(`${apiUrl}/auth/register`, {
+                    const response = await fetch(`${apiUrl}/api/auth/register`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ email, password })
