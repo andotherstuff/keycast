@@ -241,6 +241,11 @@ pub async fn token(
     .execute(pool)
     .await?;
 
+    // Signal signer daemon to reload immediately
+    let signal_file = std::path::Path::new("database/.reload_signal");
+    let _ = std::fs::File::create(signal_file);
+    tracing::info!("Created reload signal for signer daemon");
+
     // Build bunker URL
     let bunker_url = format!(
         "bunker://{}?relay={}&secret={}",

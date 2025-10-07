@@ -156,23 +156,31 @@ impl UnifiedSigner {
 
         self.client.subscribe(vec![filter], None).await?;
 
-        // Spawn background task to reload authorizations periodically
+        // Spawn background task to reload authorizations periodically or on signal
         let pool_clone = self.pool.clone();
         let key_manager_clone = self.key_manager.clone();
         let handlers_clone = self.handlers.clone();
         let client_clone = self.client.clone();
         tokio::spawn(async move {
+            let signal_path = std::path::Path::new("database/.reload_signal");
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                // Check for signal file first
+                if signal_path.exists() {
+                    tracing::info!("Reload signal detected, reloading authorizations immediately");
+                    let _ = std::fs::remove_file(signal_path); // Consume the signal
 
-                if let Err(e) = Self::reload_authorizations_if_needed(
-                    &pool_clone,
-                    &key_manager_clone,
-                    &handlers_clone,
-                    &client_clone
-                ).await {
-                    tracing::error!("Error reloading authorizations: {}", e);
+                    if let Err(e) = Self::reload_authorizations_if_needed(
+                        &pool_clone,
+                        &key_manager_clone,
+                        &handlers_clone,
+                        &client_clone
+                    ).await {
+                        tracing::error!("Error reloading authorizations: {}", e);
+                    }
                 }
+
+                // Sleep briefly and check again (fast polling)
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         });
 
