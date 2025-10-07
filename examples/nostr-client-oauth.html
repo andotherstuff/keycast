@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast Nostr Client (OAuth)</title>
+    <script src="https://cdn.jsdelivr.net/npm/nostr-tools@2/lib/nostr.bundle.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #bb86fc;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .section {
+            background: #2a2a2a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+        }
+        .section h2 {
+            color: #03dac6;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        input, textarea, button {
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border: 1px solid #4a4a4a;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            font-size: 14px;
+            width: 100%;
+            font-family: inherit;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        button {
+            background: #bb86fc;
+            color: #000;
+            font-weight: 600;
+            cursor: pointer;
+            width: auto;
+            padding: 12px 24px;
+        }
+        button:hover {
+            background: #cb96fc;
+        }
+        button:disabled {
+            background: #555;
+            color: #888;
+            cursor: not-allowed;
+        }
+        .hidden {
+            display: none;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+        .success {
+            background: #1b5e20;
+            color: #a5d6a7;
+        }
+        .error {
+            background: #b71c1c;
+            color: #ef9a9a;
+        }
+        .info {
+            background: #01579b;
+            color: #81d4fa;
+        }
+        .note {
+            background: #1a1a1a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            border-left: 4px solid #bb86fc;
+        }
+        .note-author {
+            color: #bb86fc;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .note-content {
+            color: #e0e0e0;
+            margin-bottom: 5px;
+        }
+        .note-time {
+            color: #888;
+            font-size: 12px;
+        }
+        .info-item {
+            margin: 8px 0;
+            padding: 8px;
+            background: #1a1a1a;
+            border-radius: 4px;
+        }
+        .info-label {
+            color: #888;
+            font-size: 12px;
+        }
+        .info-value {
+            color: #03dac6;
+            font-family: monospace;
+            word-break: break-all;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Keycast Nostr Client</h1>
+        <p class="subtitle">OAuth-authenticated remote signing via NIP-46</p>
+
+        <!-- Configuration -->
+        <div class="section">
+            <h2>⚙️ Configuration</h2>
+            <input type="url" id="apiUrl" value="http://localhost:3000" placeholder="API URL">
+            <input type="text" id="clientId" value="nostr-web-client" placeholder="OAuth Client ID">
+            <input type="url" id="redirectUri" value="http://localhost:8000/callback" placeholder="Redirect URI">
+        </div>
+
+        <!-- OAuth Authorization -->
+        <div class="section" id="oauthSection">
+            <h2>1️⃣ OAuth Authorization</h2>
+            <p style="margin-bottom: 15px; color: #888;">First, authorize this Nostr client to sign events on your behalf using OAuth.</p>
+
+            <div id="authChoice">
+                <h3 style="color: #bb86fc; margin-bottom: 10px;">Choose Authentication Method:</h3>
+                <div class="button-group">
+                    <button onclick="showRegister()">New User (Register)</button>
+                    <button onclick="showLogin()">Existing User (Login)</button>
+                </div>
+            </div>
+
+            <div id="registerForm" class="hidden" style="margin-top: 15px;">
+                <h3 style="color: #bb86fc; margin-bottom: 10px;">Register New Account:</h3>
+                <input type="email" id="registerEmail" placeholder="Email">
+                <input type="password" id="registerPassword" placeholder="Password">
+                <div class="button-group">
+                    <button onclick="register()">Register & Authorize</button>
+                    <button onclick="hideAuthForms()" style="background: #555;">Cancel</button>
+                </div>
+            </div>
+
+            <div id="loginForm" class="hidden" style="margin-top: 15px;">
+                <h3 style="color: #bb86fc; margin-bottom: 10px;">Login:</h3>
+                <input type="email" id="loginEmail" placeholder="Email">
+                <input type="password" id="loginPassword" placeholder="Password">
+                <div class="button-group">
+                    <button onclick="login()">Login & Authorize</button>
+                    <button onclick="hideAuthForms()" style="background: #555;">Cancel</button>
+                </div>
+            </div>
+
+            <div id="authStatus"></div>
+        </div>
+
+        <!-- App Section (Hidden until authorized) -->
+        <div id="appSection" class="hidden">
+            <div class="section">
+                <h2>👤 Your Identity</h2>
+                <div class="info-item">
+                    <div class="info-label">Public Key (hex):</div>
+                    <div class="info-value" id="userPubkey"></div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Bunker URL (NIP-46):</div>
+                    <div class="info-value" id="userBunker"></div>
+                </div>
+                <button onclick="logout()">Logout</button>
+            </div>
+
+            <!-- Post Note -->
+            <div class="section">
+                <h2>📝 Post Note</h2>
+                <textarea id="noteContent" placeholder="What's on your mind?"></textarea>
+                <button onclick="postNote()">Post to Nostr</button>
+                <div id="postStatus"></div>
+            </div>
+
+            <!-- View Notes -->
+            <div class="section">
+                <h2>📰 Recent Notes</h2>
+                <button onclick="loadNotes()">Load My Notes</button>
+                <div id="notesStatus"></div>
+                <div id="notesList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const NostrTools = window.NostrTools;
+
+        let userData = null;
+        let jwtToken = null;
+        let relayConnection = null;
+
+        function showStatus(elementId, message, type) {
+            const el = document.getElementById(elementId);
+            el.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function showRegister() {
+            document.getElementById('authChoice').classList.add('hidden');
+            document.getElementById('registerForm').classList.remove('hidden');
+            document.getElementById('loginForm').classList.add('hidden');
+        }
+
+        function showLogin() {
+            document.getElementById('authChoice').classList.add('hidden');
+            document.getElementById('registerForm').classList.add('hidden');
+            document.getElementById('loginForm').classList.remove('hidden');
+        }
+
+        function hideAuthForms() {
+            document.getElementById('authChoice').classList.remove('hidden');
+            document.getElementById('registerForm').classList.add('hidden');
+            document.getElementById('loginForm').classList.add('hidden');
+        }
+
+        async function register() {
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+            const apiUrl = document.getElementById('apiUrl').value;
+
+            if (!email || !password) {
+                showStatus('authStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('authStatus', 'Registering...', 'info');
+
+                // Step 1: Register user
+                const response = await fetch(`${apiUrl}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Registration failed');
+                }
+
+                jwtToken = data.token;
+                showStatus('authStatus', '✓ Registered! Now authorizing OAuth...', 'info');
+
+                // Step 2: Get OAuth authorization
+                await authorizeOAuth();
+
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const apiUrl = document.getElementById('apiUrl').value;
+
+            if (!email || !password) {
+                showStatus('authStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('authStatus', 'Logging in...', 'info');
+
+                // Step 1: Login
+                const response = await fetch(`${apiUrl}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Login failed');
+                }
+
+                jwtToken = data.token;
+                showStatus('authStatus', '✓ Logged in! Now authorizing OAuth...', 'info');
+
+                // Step 2: Get OAuth authorization
+                await authorizeOAuth();
+
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function authorizeOAuth() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const clientId = document.getElementById('clientId').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+
+            try {
+                showStatus('authStatus', '🔐 Requesting OAuth authorization...', 'info');
+
+                // Approve OAuth authorization
+                const approveResponse = await fetch(`${apiUrl}/api/oauth/authorize`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cookie': `session=${jwtToken}`
+                    },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        redirect_uri: redirectUri,
+                        scope: 'sign_event',
+                        approved: true
+                    }),
+                    redirect: 'manual'
+                });
+
+                // Get authorization code from redirect
+                if (approveResponse.status >= 300 && approveResponse.status < 400) {
+                    const location = approveResponse.headers.get('Location');
+                    const code = new URL(location).searchParams.get('code');
+
+                    if (!code) {
+                        throw new Error('No authorization code received');
+                    }
+
+                    showStatus('authStatus', '🔑 Authorization code received, exchanging for bunker URL...', 'info');
+
+                    // Exchange code for bunker URL
+                    const tokenResponse = await fetch(`${apiUrl}/api/oauth/token`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            code,
+                            client_id: clientId,
+                            redirect_uri: redirectUri
+                        })
+                    });
+
+                    const tokenData = await tokenResponse.json();
+                    if (!tokenResponse.ok) {
+                        throw new Error(tokenData.error || 'Token exchange failed');
+                    }
+
+                    // Extract pubkey from bunker URL
+                    const bunkerUrl = tokenData.bunker_url;
+                    const pubkeyMatch = bunkerUrl.match(/^bunker:\/\/([0-9a-f]{64})/);
+                    if (!pubkeyMatch) {
+                        throw new Error('Could not extract pubkey from bunker URL');
+                    }
+
+                    userData = {
+                        pubkey: pubkeyMatch[1],
+                        bunker_url: bunkerUrl
+                    };
+
+                    showLoggedIn();
+                    showStatus('authStatus', '✓ OAuth authorization complete! You can now post to Nostr.', 'success');
+                } else {
+                    throw new Error('OAuth authorization failed');
+                }
+
+            } catch (error) {
+                showStatus('authStatus', `✗ OAuth error: ${error.message}`, 'error');
+            }
+        }
+
+        function showLoggedIn() {
+            document.getElementById('oauthSection').classList.add('hidden');
+            document.getElementById('appSection').classList.remove('hidden');
+            document.getElementById('userPubkey').textContent = userData.pubkey;
+            document.getElementById('userBunker').textContent = userData.bunker_url;
+        }
+
+        function logout() {
+            userData = null;
+            jwtToken = null;
+            if (relayConnection) {
+                relayConnection.close();
+                relayConnection = null;
+            }
+            document.getElementById('oauthSection').classList.remove('hidden');
+            document.getElementById('appSection').classList.add('hidden');
+            hideAuthForms();
+            showStatus('authStatus', '', 'info');
+        }
+
+        async function postNote() {
+            if (!userData) {
+                showStatus('postStatus', 'Please authorize first', 'error');
+                return;
+            }
+
+            const content = document.getElementById('noteContent').value;
+            if (!content) {
+                showStatus('postStatus', 'Please enter some content', 'error');
+                return;
+            }
+
+            try {
+                showStatus('postStatus', '📝 Creating note event...', 'info');
+
+                // Parse bunker URL
+                const bunkerUrl = userData.bunker_url;
+                const match = bunkerUrl.match(/^bunker:\/\/([0-9a-f]{64})\?relay=(.+)&secret=(.+)$/);
+                if (!match) {
+                    throw new Error('Invalid bunker URL format');
+                }
+
+                const [, bunkerPubkey, relayUrl, secret] = match;
+
+                showStatus('postStatus', '🔐 Connecting to bunker...', 'info');
+
+                // Connect to relay
+                const relay = await NostrTools.Relay.connect(relayUrl);
+
+                await relay.connect();
+
+                // Create unsigned note event
+                const unsignedEvent = {
+                    kind: 1,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [],
+                    content: content,
+                    pubkey: userData.pubkey
+                };
+
+                showStatus('postStatus', '📡 Sending signing request to bunker...', 'info');
+
+                // Create NIP-46 sign_event request
+                const requestId = NostrTools.generateSecretKey();
+                const requestIdHex = NostrTools.bytesToHex(requestId);
+
+                const nip46Request = {
+                    id: requestIdHex,
+                    method: 'sign_event',
+                    params: [unsignedEvent]
+                };
+
+                // Create kind 24133 event for NIP-46
+                const nip46Event = {
+                    kind: 24133,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [['p', bunkerPubkey]],
+                    content: JSON.stringify(nip46Request),
+                    pubkey: userData.pubkey
+                };
+
+                // Sign the NIP-46 request event (this is a simplification - in reality we'd use the secret)
+                const signedNip46Event = NostrTools.finalizeEvent(nip46Event, NostrTools.hexToBytes(secret.padStart(64, '0')));
+
+                // Publish the signing request
+                await relay.publish(signedNip46Event);
+
+                // Wait for response from bunker
+                showStatus('postStatus', '⏳ Waiting for bunker to sign...', 'info');
+
+                const sub = relay.subscribe([
+                    {
+                        kinds: [24133],
+                        authors: [bunkerPubkey],
+                        '#p': [userData.pubkey],
+                        since: Math.floor(Date.now() / 1000)
+                    }
+                ], {
+                    onevent(event) {
+                        try {
+                            const response = JSON.parse(event.content);
+                            if (response.id === requestIdHex && response.result) {
+                                showStatus('postStatus', '✓ Event signed by bunker! Publishing...', 'success');
+
+                                // Publish the signed event
+                                const signedEvent = response.result;
+                                relay.publish(signedEvent);
+
+                                showStatus('postStatus', '✓ Note published successfully!', 'success');
+                                document.getElementById('noteContent').value = '';
+                                sub.close();
+                                relay.close();
+                            }
+                        } catch (e) {
+                            console.error('Error processing bunker response:', e);
+                        }
+                    }
+                });
+
+                // Timeout after 30 seconds
+                setTimeout(() => {
+                    sub.close();
+                    relay.close();
+                    if (document.getElementById('postStatus').textContent.includes('Waiting')) {
+                        showStatus('postStatus', '✗ Bunker signing timeout', 'error');
+                    }
+                }, 30000);
+
+            } catch (error) {
+                showStatus('postStatus', `✗ ${error.message}`, 'error');
+                console.error('Post error:', error);
+            }
+        }
+
+        async function loadNotes() {
+            if (!userData) {
+                showStatus('notesStatus', 'Please authorize first', 'error');
+                return;
+            }
+
+            try {
+                showStatus('notesStatus', '📡 Loading notes from relay...', 'info');
+
+                const relayUrl = 'wss://relay.damus.io';
+                const relay = await NostrTools.Relay.connect(relayUrl);
+                await relay.connect();
+
+                const notes = [];
+                const sub = relay.subscribe([
+                    {
+                        kinds: [1],
+                        authors: [userData.pubkey],
+                        limit: 20
+                    }
+                ], {
+                    onevent(event) {
+                        notes.push(event);
+                    },
+                    oneose() {
+                        sub.close();
+                        relay.close();
+                        displayNotes(notes);
+                        showStatus('notesStatus', `✓ Loaded ${notes.length} notes`, 'success');
+                    }
+                });
+
+            } catch (error) {
+                showStatus('notesStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        function displayNotes(notes) {
+            const notesList = document.getElementById('notesList');
+
+            if (notes.length === 0) {
+                notesList.innerHTML = '<div class="status info">No notes found. Post your first note!</div>';
+                return;
+            }
+
+            // Sort by timestamp (newest first)
+            notes.sort((a, b) => b.created_at - a.created_at);
+
+            notesList.innerHTML = notes.map(note => `
+                <div class="note">
+                    <div class="note-author">@${note.pubkey.substring(0, 8)}...</div>
+                    <div class="note-content">${escapeHtml(note.content)}</div>
+                    <div class="note-time">${new Date(note.created_at * 1000).toLocaleString()}</div>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

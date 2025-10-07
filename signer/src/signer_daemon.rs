@@ -156,6 +156,26 @@ impl UnifiedSigner {
 
         self.client.subscribe(vec![filter], None).await?;
 
+        // Spawn background task to reload authorizations periodically
+        let pool_clone = self.pool.clone();
+        let key_manager_clone = self.key_manager.clone();
+        let handlers_clone = self.handlers.clone();
+        let client_clone = self.client.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+                if let Err(e) = Self::reload_authorizations_if_needed(
+                    &pool_clone,
+                    &key_manager_clone,
+                    &handlers_clone,
+                    &client_clone
+                ).await {
+                    tracing::error!("Error reloading authorizations: {}", e);
+                }
+            }
+        });
+
         // Handle incoming events
         let client = self.client.clone();
         self.client
@@ -174,6 +194,114 @@ impl UnifiedSigner {
                 Ok(false) // Continue listening
             })
             .await?;
+
+        Ok(())
+    }
+
+    async fn reload_authorizations_if_needed(
+        pool: &SqlitePool,
+        key_manager: &Arc<Box<dyn KeyManager>>,
+        handlers: &Arc<RwLock<HashMap<String, AuthorizationHandler>>>,
+        client: &Client,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Get current count of authorizations in database
+        let regular_count = Authorization::all_ids(pool).await?.len();
+        let oauth_count = OAuthAuthorization::all_ids(pool).await?.len();
+        let db_total = regular_count + oauth_count;
+
+        // Get current count of loaded handlers
+        let loaded_count = {
+            let h = handlers.read().await;
+            h.len()
+        };
+
+        // If counts differ, reload all authorizations
+        if db_total != loaded_count {
+            tracing::info!(
+                "Authorization count changed (DB: {}, Loaded: {}), reloading...",
+                db_total,
+                loaded_count
+            );
+
+            let mut new_handlers = HashMap::new();
+
+            // Load regular authorizations
+            let regular_auths = Authorization::all_ids(pool).await?;
+            for auth_id in regular_auths {
+                let auth = Authorization::find(pool, auth_id).await?;
+
+                // Decrypt bunker secret
+                let decrypted_bunker_secret = key_manager.decrypt(&auth.bunker_secret).await?;
+                let bunker_secret_key = SecretKey::from_slice(&decrypted_bunker_secret)?;
+                let bunker_keys = Keys::new(bunker_secret_key);
+
+                // Decrypt user secret
+                let stored_key = auth.stored_key(pool).await?;
+                let decrypted_user_secret = key_manager.decrypt(&stored_key.secret_key).await?;
+                let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
+                let user_keys = Keys::new(user_secret_key);
+
+                let bunker_pubkey = bunker_keys.public_key().to_hex();
+
+                new_handlers.insert(bunker_pubkey.clone(), AuthorizationHandler {
+                    bunker_keys,
+                    user_keys,
+                    secret: auth.secret.clone(),
+                    authorization_id: auth_id,
+                    is_oauth: false,
+                    pool: pool.clone(),
+                });
+            }
+
+            // Load OAuth authorizations
+            let oauth_auths = OAuthAuthorization::all_ids(pool).await?;
+            for auth_id in oauth_auths {
+                let auth = OAuthAuthorization::find(pool, auth_id).await?;
+
+                // Decrypt user secret (used for both bunker and signing in OAuth)
+                let decrypted_user_secret = key_manager.decrypt(&auth.bunker_secret).await?;
+                let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
+                let user_keys = Keys::new(user_secret_key.clone());
+
+                let bunker_pubkey = user_keys.public_key().to_hex();
+
+                new_handlers.insert(bunker_pubkey.clone(), AuthorizationHandler {
+                    bunker_keys: user_keys.clone(),
+                    user_keys,
+                    secret: auth.secret.clone(),
+                    authorization_id: auth_id,
+                    is_oauth: true,
+                    pool: pool.clone(),
+                });
+            }
+
+            // Update handlers
+            {
+                let mut h = handlers.write().await;
+                *h = new_handlers;
+            }
+
+            // Resubscribe with updated pubkeys
+            let handler_pubkeys: Vec<String> = {
+                let h = handlers.read().await;
+                h.keys().cloned().collect()
+            };
+
+            if !handler_pubkeys.is_empty() {
+                let filter = Filter::new()
+                    .kind(Kind::NostrConnect)
+                    .pubkeys(handler_pubkeys.iter().map(|pk| {
+                        PublicKey::from_hex(pk).unwrap()
+                    }));
+
+                client.subscribe(vec![filter], None).await?;
+
+                tracing::info!(
+                    "Reloaded {} authorizations and updated subscriptions",
+                    handler_pubkeys.len()
+                );
+            }
+        }
 
         Ok(())
     }

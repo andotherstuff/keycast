@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast Nostr Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/nostr-tools@2/lib/nostr.bundle.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #bb86fc;
+            margin-bottom: 30px;
+        }
+        .section {
+            background: #2a2a2a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+        }
+        .section h2 {
+            color: #03dac6;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        input, textarea, button {
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border: 1px solid #4a4a4a;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            font-size: 14px;
+            width: 100%;
+            font-family: inherit;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        button {
+            background: #bb86fc;
+            color: #000;
+            font-weight: 600;
+            cursor: pointer;
+            width: auto;
+            padding: 12px 24px;
+        }
+        button:hover {
+            background: #cb96fc;
+        }
+        button:disabled {
+            background: #555;
+            color: #888;
+            cursor: not-allowed;
+        }
+        .hidden {
+            display: none;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+        .success {
+            background: #1b5e20;
+            color: #a5d6a7;
+        }
+        .error {
+            background: #b71c1c;
+            color: #ef9a9a;
+        }
+        .info {
+            background: #01579b;
+            color: #81d4fa;
+        }
+        .note {
+            background: #1a1a1a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            border-left: 4px solid #bb86fc;
+        }
+        .note-author {
+            color: #bb86fc;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .note-content {
+            margin: 10px 0;
+            line-height: 1.5;
+        }
+        .note-time {
+            color: #888;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background: #2a2a2a;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .tab.active {
+            background: #bb86fc;
+            color: #000;
+            border-color: #bb86fc;
+        }
+        .user-info {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        .user-info strong {
+            color: #03dac6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Keycast Nostr Client</h1>
+
+        <!-- Auth Section -->
+        <div id="authSection">
+            <div class="section">
+                <h2>Register or Login</h2>
+                <input type="text" id="apiUrl" value="http://localhost:3000" placeholder="API URL">
+                <input type="email" id="email" placeholder="Email">
+                <input type="password" id="password" placeholder="Password">
+                <div style="display: flex; gap: 10px;">
+                    <button onclick="register()">Register</button>
+                    <button onclick="login()">Login</button>
+                </div>
+                <div id="authStatus"></div>
+            </div>
+        </div>
+
+        <!-- Main App Section (hidden until logged in) -->
+        <div id="appSection" class="hidden">
+            <div class="section user-info">
+                <div><strong>Public Key:</strong> <span id="userPubkey"></span></div>
+                <div><strong>Bunker URL:</strong> <span id="userBunker" style="font-size: 11px; word-break: break-all;"></span></div>
+                <button onclick="logout()">Logout</button>
+            </div>
+
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('post')">Post</div>
+                <div class="tab" onclick="switchTab('feed')">Feed</div>
+                <div class="tab" onclick="switchTab('follow')">Follow</div>
+            </div>
+
+            <!-- Post Tab -->
+            <div id="postTab" class="section">
+                <h2>Post a Note</h2>
+                <textarea id="noteContent" placeholder="What's happening?"></textarea>
+                <button onclick="postNote()">Post to Nostr</button>
+                <div id="postStatus"></div>
+            </div>
+
+            <!-- Feed Tab -->
+            <div id="feedTab" class="section hidden">
+                <h2>Your Feed</h2>
+                <input type="text" id="relayUrl" value="wss://relay.damus.io" placeholder="Relay URL">
+                <button onclick="loadFeed()">Load Feed</button>
+                <div id="feedStatus"></div>
+                <div id="feedContent"></div>
+            </div>
+
+            <!-- Follow Tab -->
+            <div id="followTab" class="section hidden">
+                <h2>Follow Users</h2>
+                <input type="text" id="followPubkey" placeholder="Public key (hex) or npub">
+                <button onclick="followUser()">Follow</button>
+                <div id="followStatus"></div>
+                <div>
+                    <h3 style="color: #03dac6; margin-top: 20px;">Your Follows:</h3>
+                    <div id="followsList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let userData = null;
+        let relayConnection = null;
+        let follows = [];
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('[id$="Tab"]').forEach(t => t.classList.add('hidden'));
+
+            event.target.classList.add('active');
+            document.getElementById(tab + 'Tab').classList.remove('hidden');
+        }
+
+        function showStatus(elementId, message, type = 'info') {
+            const el = document.getElementById(elementId);
+            el.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const apiUrl = document.getElementById('apiUrl').value;
+
+            if (!email || !password) {
+                showStatus('authStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('authStatus', 'Creating account...', 'info');
+                const response = await fetch(`${apiUrl}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Registration failed');
+                }
+
+                userData = data;
+                showLoggedIn();
+                showStatus('authStatus', '✓ Registered and logged in!', 'success');
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const apiUrl = document.getElementById('apiUrl').value;
+
+            if (!email || !password) {
+                showStatus('authStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('authStatus', 'Logging in...', 'info');
+                const response = await fetch(`${apiUrl}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Login failed');
+                }
+
+                userData = data;
+                showLoggedIn();
+                showStatus('authStatus', '✓ Logged in successfully!', 'success');
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        function showLoggedIn() {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('appSection').classList.remove('hidden');
+            document.getElementById('userPubkey').textContent = userData.pubkey;
+            document.getElementById('userBunker').textContent = userData.bunker_url;
+        }
+
+        function logout() {
+            userData = null;
+            if (relayConnection) {
+                relayConnection.close();
+                relayConnection = null;
+            }
+            document.getElementById('authSection').classList.remove('hidden');
+            document.getElementById('appSection').classList.add('hidden');
+            document.getElementById('email').value = '';
+            document.getElementById('password').value = '';
+            showStatus('authStatus', 'Logged out', 'info');
+        }
+
+        async function postNote() {
+            if (!userData) {
+                showStatus('postStatus', 'Please login first', 'error');
+                return;
+            }
+
+            const content = document.getElementById('noteContent').value;
+            if (!content) {
+                showStatus('postStatus', 'Please enter a note', 'error');
+                return;
+            }
+
+            try {
+                showStatus('postStatus', 'Posting to Nostr...', 'info');
+
+                // Extract hex pubkey from bunker URL
+                const bunkerPubkeyMatch = userData.bunker_url.match(/^bunker:\/\/([0-9a-f]{64})/);
+                if (!bunkerPubkeyMatch) {
+                    throw new Error('Could not extract pubkey from bunker URL');
+                }
+                const hexPubkey = bunkerPubkeyMatch[1];
+
+                // Create a kind 1 event (text note)
+                const event = {
+                    kind: 1,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [],
+                    content: content,
+                    pubkey: hexPubkey
+                };
+
+                // For now, we'll use nostr-tools to sign
+                // In a real NIP-46 implementation, we'd send a signing request to the bunker
+                const signedEvent = await signEventViaBunker(event);
+
+                // Publish to relay
+                const relayUrl = document.getElementById('relayUrl').value;
+                await publishToRelay(relayUrl, signedEvent);
+
+                showStatus('postStatus', '✓ Posted to Nostr!', 'success');
+                document.getElementById('noteContent').value = '';
+            } catch (error) {
+                showStatus('postStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function signEventViaBunker(event) {
+            // Parse bunker URL: bunker://{pubkey}?relay={relay}&secret={secret}
+            const bunkerUrl = userData.bunker_url;
+            const match = bunkerUrl.match(/^bunker:\/\/([0-9a-f]{64})\?relay=(.+)&secret=(.+)$/);
+            if (!match) {
+                throw new Error('Invalid bunker URL format');
+            }
+
+            const [, bunkerPubkey, relayUrl, secret] = match;
+
+            showStatus('postStatus', '🔐 Connecting to bunker...', 'info');
+
+            // Generate a temporary keypair for this client session
+            const clientKeys = NostrTools.generateSecretKey();
+            const clientPubkey = NostrTools.getPublicKey(clientKeys);
+
+            // Connect to the bunker relay
+            const relay = new WebSocket(decodeURIComponent(relayUrl));
+
+            return new Promise((resolve, reject) => {
+                const requestId = Math.random().toString(36).substring(7);
+                let responseReceived = false;
+
+                relay.onopen = async () => {
+                    try {
+                        showStatus('postStatus', '📡 Sending signing request to bunker...', 'info');
+
+                        // Create NIP-46 sign_event request
+                        const request = {
+                            id: requestId,
+                            method: 'sign_event',
+                            params: [event]
+                        };
+
+                        // Encrypt the request using NIP-44
+                        const encryptedContent = await NostrTools.nip44.encrypt(
+                            clientKeys,
+                            bunkerPubkey,
+                            JSON.stringify(request)
+                        );
+
+                        // Create kind 24133 event for NIP-46
+                        const requestEvent = {
+                            kind: 24133,
+                            created_at: Math.floor(Date.now() / 1000),
+                            tags: [['p', bunkerPubkey]],
+                            content: encryptedContent,
+                            pubkey: clientPubkey
+                        };
+
+                        // Sign the request event
+                        requestEvent.id = NostrTools.getEventHash(requestEvent);
+                        requestEvent.sig = NostrTools.signEvent(requestEvent, clientKeys);
+
+                        // Subscribe to responses before sending request
+                        const subId = 'nip46-' + requestId;
+                        const filter = {
+                            kinds: [24133],
+                            authors: [bunkerPubkey],
+                            '#p': [clientPubkey],
+                            since: Math.floor(Date.now() / 1000)
+                        };
+                        relay.send(JSON.stringify(['REQ', subId, filter]));
+
+                        // Send the signing request
+                        relay.send(JSON.stringify(['EVENT', requestEvent]));
+
+                        showStatus('postStatus', '⏳ Waiting for bunker to sign...', 'info');
+                    } catch (error) {
+                        relay.close();
+                        reject(new Error(`Failed to send signing request: ${error.message}`));
+                    }
+                };
+
+                relay.onmessage = async (msg) => {
+                    try {
+                        const [type, subId, responseEvent] = JSON.parse(msg.data);
+
+                        if (type === 'EVENT' && responseEvent && responseEvent.kind === 24133) {
+                            // Decrypt the response
+                            const decryptedResponse = await NostrTools.nip44.decrypt(
+                                clientKeys,
+                                bunkerPubkey,
+                                responseEvent.content
+                            );
+
+                            const response = JSON.parse(decryptedResponse);
+
+                            if (response.id === requestId) {
+                                responseReceived = true;
+                                relay.close();
+
+                                if (response.error) {
+                                    reject(new Error(`Bunker error: ${response.error}`));
+                                } else {
+                                    showStatus('postStatus', '✅ Event signed by bunker!', 'success');
+                                    resolve(response.result);
+                                }
+                            }
+                        } else if (type === 'NOTICE') {
+                            console.warn('Relay notice:', subId);
+                        }
+                    } catch (error) {
+                        relay.close();
+                        reject(new Error(`Failed to process response: ${error.message}`));
+                    }
+                };
+
+                relay.onerror = () => {
+                    reject(new Error('Failed to connect to bunker relay'));
+                };
+
+                // Timeout after 30 seconds
+                setTimeout(() => {
+                    if (!responseReceived) {
+                        relay.close();
+                        reject(new Error('Timeout waiting for bunker to sign event'));
+                    }
+                }, 30000);
+            });
+        }
+
+        async function publishToRelay(relayUrl, event) {
+            return new Promise((resolve, reject) => {
+                const relay = new WebSocket(relayUrl);
+
+                relay.onopen = () => {
+                    relay.send(JSON.stringify(['EVENT', event]));
+                };
+
+                relay.onmessage = (msg) => {
+                    const [type, ...rest] = JSON.parse(msg.data);
+                    if (type === 'OK') {
+                        relay.close();
+                        resolve();
+                    } else if (type === 'NOTICE') {
+                        relay.close();
+                        reject(new Error(rest[0]));
+                    }
+                };
+
+                relay.onerror = () => {
+                    reject(new Error('Failed to connect to relay'));
+                };
+
+                setTimeout(() => {
+                    relay.close();
+                    reject(new Error('Timeout publishing to relay'));
+                }, 5000);
+            });
+        }
+
+        async function loadFeed() {
+            const relayUrl = document.getElementById('relayUrl').value;
+
+            try {
+                showStatus('feedStatus', 'Connecting to relay...', 'info');
+
+                if (relayConnection) {
+                    relayConnection.close();
+                }
+
+                relayConnection = new WebSocket(relayUrl);
+
+                relayConnection.onopen = () => {
+                    showStatus('feedStatus', '✓ Connected! Loading recent notes...', 'success');
+
+                    // Subscribe to kind 1 events from the last hour
+                    const subscription = {
+                        kinds: [1],
+                        since: Math.floor(Date.now() / 1000) - 3600,
+                        limit: 20
+                    };
+
+                    relayConnection.send(JSON.stringify(['REQ', 'feed', subscription]));
+                };
+
+                const notes = [];
+                relayConnection.onmessage = (msg) => {
+                    const [type, subId, event] = JSON.parse(msg.data);
+                    if (type === 'EVENT' && event) {
+                        notes.push(event);
+                        displayFeed(notes);
+                    } else if (type === 'EOSE') {
+                        showStatus('feedStatus', `✓ Loaded ${notes.length} notes`, 'success');
+                    }
+                };
+
+                relayConnection.onerror = () => {
+                    showStatus('feedStatus', '✗ Failed to connect to relay', 'error');
+                };
+
+            } catch (error) {
+                showStatus('feedStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        function displayFeed(notes) {
+            const feedContent = document.getElementById('feedContent');
+            const sortedNotes = notes.sort((a, b) => b.created_at - a.created_at);
+
+            feedContent.innerHTML = sortedNotes.map(note => {
+                const date = new Date(note.created_at * 1000);
+                const shortPubkey = note.pubkey.substring(0, 8) + '...' + note.pubkey.substring(note.pubkey.length - 8);
+                return `
+                    <div class="note">
+                        <div class="note-author">${shortPubkey}</div>
+                        <div class="note-content">${escapeHtml(note.content)}</div>
+                        <div class="note-time">${date.toLocaleString()}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function followUser() {
+            const pubkey = document.getElementById('followPubkey').value.trim();
+
+            if (!pubkey) {
+                showStatus('followStatus', 'Please enter a public key', 'error');
+                return;
+            }
+
+            try {
+                let hexPubkey = pubkey;
+
+                // Convert npub to hex if needed
+                if (pubkey.startsWith('npub')) {
+                    try {
+                        const decoded = NostrTools.nip19.decode(pubkey);
+                        hexPubkey = decoded.data;
+                    } catch (e) {
+                        throw new Error('Invalid npub format');
+                    }
+                }
+
+                if (!/^[0-9a-f]{64}$/i.test(hexPubkey)) {
+                    throw new Error('Invalid public key format');
+                }
+
+                if (follows.includes(hexPubkey)) {
+                    showStatus('followStatus', 'Already following this user', 'info');
+                    return;
+                }
+
+                follows.push(hexPubkey);
+                displayFollows();
+                document.getElementById('followPubkey').value = '';
+                showStatus('followStatus', '✓ Followed!', 'success');
+
+                // In a real app, we'd publish a kind 3 event with the follow list
+            } catch (error) {
+                showStatus('followStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        function displayFollows() {
+            const followsList = document.getElementById('followsList');
+            if (follows.length === 0) {
+                followsList.innerHTML = '<div style="color: #888; margin-top: 10px;">No follows yet</div>';
+                return;
+            }
+
+            followsList.innerHTML = follows.map(pubkey => {
+                const short = pubkey.substring(0, 8) + '...' + pubkey.substring(pubkey.length - 8);
+                return `
+                    <div style="background: #1a1a1a; padding: 10px; margin: 5px 0; border-radius: 4px;">
+                        <span style="color: #bb86fc;">${short}</span>
+                        <button onclick="unfollowUser('${pubkey}')" style="padding: 5px 10px; margin-left: 10px; font-size: 12px;">Unfollow</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function unfollowUser(pubkey) {
+            follows = follows.filter(p => p !== pubkey);
+            displayFollows();
+            showStatus('followStatus', '✓ Unfollowed', 'success');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        displayFollows();
+    </script>
+</body>
+</html>

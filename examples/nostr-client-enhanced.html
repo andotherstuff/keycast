@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast Nostr Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/nostr-tools@2/lib/nostr.bundle.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #bb86fc; margin-bottom: 30px; }
+        .section {
+            background: #2a2a2a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+        }
+        .section h2 { color: #03dac6; margin-bottom: 15px; font-size: 1.2em; }
+        input, textarea, button {
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 6px;
+            border: 1px solid #4a4a4a;
+            background: #3a3a3a;
+            color: #e0e0e0;
+            font-size: 14px;
+            width: 100%;
+            font-family: inherit;
+        }
+        textarea { min-height: 100px; resize: vertical; }
+        button {
+            background: #bb86fc;
+            color: #000;
+            font-weight: 600;
+            cursor: pointer;
+            width: auto;
+            padding: 12px 24px;
+        }
+        button:hover { background: #cb96fc; }
+        button:disabled { background: #555; color: #888; cursor: not-allowed; }
+        button.secondary { background: #03dac6; }
+        button.secondary:hover { background: #03ead6; }
+        .hidden { display: none; }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+        .success { background: #1b5e20; color: #a5d6a7; }
+        .error { background: #b71c1c; color: #ef9a9a; }
+        .info { background: #01579b; color: #81d4fa; }
+        .note {
+            background: #1a1a1a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            border-left: 4px solid #bb86fc;
+            cursor: pointer;
+        }
+        .note:hover { background: #2a2a2a; }
+        .note-author {
+            color: #bb86fc;
+            font-weight: 600;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+        .note-author:hover { text-decoration: underline; }
+        .note-content { margin: 10px 0; line-height: 1.5; }
+        .note-time { color: #888; font-size: 12px; margin-top: 8px; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .tab {
+            padding: 10px 20px;
+            background: #2a2a2a;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .tab.active { background: #bb86fc; color: #000; border-color: #bb86fc; }
+        .user-info {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        .user-info strong { color: #03dac6; }
+        .profile-view {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .profile-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 20px;
+        }
+        .profile-pubkey {
+            color: #bb86fc;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .back-btn {
+            background: #555;
+            color: #fff;
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+        .back-btn:hover { background: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Keycast Nostr Client</h1>
+
+        <!-- Auth Section -->
+        <div id="authSection">
+            <div class="section">
+                <h2>Register or Login</h2>
+                <input type="text" id="apiUrl" value="http://localhost:3000" placeholder="API URL">
+                <input type="email" id="email" placeholder="Email">
+                <input type="password" id="password" placeholder="Password">
+                <div style="display: flex; gap: 10px;">
+                    <button onclick="register()">Register</button>
+                    <button onclick="login()">Login</button>
+                </div>
+                <div id="authStatus"></div>
+            </div>
+        </div>
+
+        <!-- Main App Section -->
+        <div id="appSection" class="hidden">
+            <div class="section user-info">
+                <div><strong>Your npub:</strong> <span id="userPubkey"></span></div>
+                <div><strong>Bunker URL:</strong> <span id="userBunker" style="font-size: 11px; word-break: break-all;"></span></div>
+                <button onclick="logout()">Logout</button>
+            </div>
+
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('post')">Post</div>
+                <div class="tab" onclick="switchTab('myposts')">My Posts</div>
+                <div class="tab" onclick="switchTab('feed')">Feed</div>
+                <div class="tab" onclick="switchTab('follow')">Following</div>
+            </div>
+
+            <!-- Post Tab -->
+            <div id="postTab" class="section">
+                <h2>Post a Note</h2>
+                <textarea id="noteContent" placeholder="What's happening?"></textarea>
+                <button onclick="postNote()">Post to Nostr</button>
+                <div id="postStatus"></div>
+            </div>
+
+            <!-- My Posts Tab -->
+            <div id="mypostsTab" class="section hidden">
+                <h2>My Posts</h2>
+                <input type="text" id="myPostsRelay" value="wss://relay.damus.io" placeholder="Relay URL">
+                <button onclick="loadMyPosts()">Load My Posts</button>
+                <div id="myPostsStatus"></div>
+                <div id="myPostsContent"></div>
+            </div>
+
+            <!-- Feed Tab -->
+            <div id="feedTab" class="section hidden">
+                <h2>Global Feed</h2>
+                <input type="text" id="relayUrl" value="wss://relay.damus.io" placeholder="Relay URL">
+                <button onclick="loadFeed()">Load Feed</button>
+                <div id="feedStatus"></div>
+                <div id="feedContent"></div>
+            </div>
+
+            <!-- Follow Tab -->
+            <div id="followTab" class="section hidden">
+                <h2>Following</h2>
+                <input type="text" id="followPubkey" placeholder="npub or hex pubkey">
+                <button onclick="followUser()">Follow</button>
+                <div id="followStatus"></div>
+                <div>
+                    <h3 style="color: #03dac6; margin-top: 20px;">Your Follows:</h3>
+                    <div id="followsList"></div>
+                </div>
+            </div>
+
+            <!-- Profile View (hidden by default) -->
+            <div id="profileView" class="hidden">
+                <div class="profile-view">
+                    <div class="profile-header">
+                        <div>
+                            <h2 id="profileTitle">User Profile</h2>
+                            <div class="profile-pubkey" id="profilePubkey"></div>
+                        </div>
+                        <div>
+                            <button class="back-btn" onclick="closeProfile()">← Back</button>
+                            <button id="profileFollowBtn" onclick="followFromProfile()">Follow</button>
+                        </div>
+                    </div>
+                    <div id="profileStatus"></div>
+                    <h3 style="color: #03dac6; margin: 20px 0 10px 0;">Recent Posts:</h3>
+                    <div id="profilePosts"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let userData = null;
+        let relayConnection = null;
+        let follows = [];
+        let currentView = 'main';
+        let currentProfilePubkey = null;
+
+        function switchTab(tab) {
+            if (currentView === 'profile') return;
+
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('[id$="Tab"]').forEach(t => t.classList.add('hidden'));
+
+            event.target.classList.add('active');
+            document.getElementById(tab + 'Tab').classList.remove('hidden');
+        }
+
+        function showStatus(elementId, message, type = 'info') {
+            const el = document.getElementById(elementId);
+            el.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const apiUrl = document.getElementById('apiUrl').value;
+
+            if (!email || !password) {
+                showStatus('authStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('authStatus', 'Creating account...', 'info');
+                const response = await fetch(`${apiUrl}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Registration failed');
+
+                userData = data;
+                showLoggedIn();
+                showStatus('authStatus', '✓ Registered and logged in!', 'success');
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const apiUrl = document.getElementById('apiUrl').value;
+
+            if (!email || !password) {
+                showStatus('authStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('authStatus', 'Logging in...', 'info');
+                const response = await fetch(`${apiUrl}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Login failed');
+
+                userData = data;
+                showLoggedIn();
+                showStatus('authStatus', '✓ Logged in successfully!', 'success');
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        function showLoggedIn() {
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('appSection').classList.remove('hidden');
+            document.getElementById('userPubkey').textContent = userData.pubkey;
+            document.getElementById('userBunker').textContent = userData.bunker_url;
+        }
+
+        function logout() {
+            userData = null;
+            if (relayConnection) { relayConnection.close(); relayConnection = null; }
+            document.getElementById('authSection').classList.remove('hidden');
+            document.getElementById('appSection').classList.add('hidden');
+            document.getElementById('email').value = '';
+            document.getElementById('password').value = '';
+            showStatus('authStatus', 'Logged out', 'info');
+        }
+
+        async function postNote() {
+            if (!userData) {
+                showStatus('postStatus', 'Please login first', 'error');
+                return;
+            }
+
+            const content = document.getElementById('noteContent').value;
+            if (!content) {
+                showStatus('postStatus', 'Please enter a note', 'error');
+                return;
+            }
+
+            try {
+                showStatus('postStatus', 'Posting to Nostr... (using placeholder signature)', 'info');
+                // In production, this would use NIP-46 to sign via the bunker
+                showStatus('postStatus', '✓ Note saved locally! (Full Nostr posting requires NIP-46 implementation)', 'success');
+                document.getElementById('noteContent').value = '';
+            } catch (error) {
+                showStatus('postStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function loadMyPosts() {
+            if (!userData) return;
+
+            const relayUrl = document.getElementById('myPostsRelay').value;
+            const myHexPubkey = await npubToHex(userData.pubkey);
+
+            try {
+                showStatus('myPostsStatus', 'Loading your posts...', 'info');
+                const notes = await loadNotesForPubkey(relayUrl, myHexPubkey);
+                displayNotes('myPostsContent', notes);
+                showStatus('myPostsStatus', `✓ Loaded ${notes.length} posts`, 'success');
+            } catch (error) {
+                showStatus('myPostsStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function loadFeed() {
+            const relayUrl = document.getElementById('relayUrl').value;
+
+            try {
+                showStatus('feedStatus', 'Loading feed...', 'info');
+                const notes = await loadNotesForPubkey(relayUrl, null, 20);
+                displayNotes('feedContent', notes, true);
+                showStatus('feedStatus', `✓ Loaded ${notes.length} notes`, 'success');
+            } catch (error) {
+                showStatus('feedStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function loadNotesForPubkey(relayUrl, pubkey, limit = 50) {
+            return new Promise((resolve, reject) => {
+                const relay = new WebSocket(relayUrl);
+                const notes = [];
+
+                relay.onopen = () => {
+                    const filter = { kinds: [1], limit };
+                    if (pubkey) filter.authors = [pubkey];
+                    else filter.since = Math.floor(Date.now() / 1000) - 3600;
+
+                    relay.send(JSON.stringify(['REQ', 'sub', filter]));
+                };
+
+                relay.onmessage = (msg) => {
+                    const [type, subId, event] = JSON.parse(msg.data);
+                    if (type === 'EVENT' && event) notes.push(event);
+                    else if (type === 'EOSE') { relay.close(); resolve(notes); }
+                };
+
+                relay.onerror = () => { relay.close(); reject(new Error('Failed to connect')); };
+                setTimeout(() => { relay.close(); resolve(notes); }, 5000);
+            });
+        }
+
+        function displayNotes(elementId, notes, showAuthor = false) {
+            const container = document.getElementById(elementId);
+            const sorted = notes.sort((a, b) => b.created_at - a.created_at);
+
+            container.innerHTML = sorted.map(note => {
+                const date = new Date(note.created_at * 1000);
+                const shortPubkey = note.pubkey.substring(0, 8) + '...' + note.pubkey.substring(note.pubkey.length - 8);
+                return `
+                    <div class="note">
+                        ${showAuthor ? `<div class="note-author" onclick="viewProfile('${note.pubkey}')">${shortPubkey}</div>` : ''}
+                        <div class="note-content">${escapeHtml(note.content)}</div>
+                        <div class="note-time">${date.toLocaleString()}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function viewProfile(hexPubkey) {
+            currentView = 'profile';
+            currentProfilePubkey = hexPubkey;
+
+            document.getElementById('appSection').querySelectorAll('.section, .tabs').forEach(el => el.classList.add('hidden'));
+            document.getElementById('profileView').classList.remove('hidden');
+
+            const shortPubkey = hexPubkey.substring(0, 16) + '...';
+            document.getElementById('profileTitle').textContent = shortPubkey;
+            document.getElementById('profilePubkey').textContent = hexPubkey;
+
+            // Update follow button
+            const isFollowing = follows.includes(hexPubkey);
+            const btn = document.getElementById('profileFollowBtn');
+            btn.textContent = isFollowing ? 'Unfollow' : 'Follow';
+            btn.className = isFollowing ? 'secondary' : '';
+
+            try {
+                showStatus('profileStatus', 'Loading posts...', 'info');
+                const relayUrl = document.getElementById('relayUrl').value || 'wss://relay.damus.io';
+                const notes = await loadNotesForPubkey(relayUrl, hexPubkey, 20);
+                displayNotes('profilePosts', notes);
+                showStatus('profileStatus', `✓ Loaded ${notes.length} posts`, 'success');
+            } catch (error) {
+                showStatus('profileStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        function closeProfile() {
+            currentView = 'main';
+            document.getElementById('profileView').classList.add('hidden');
+            document.getElementById('appSection').querySelectorAll('.section, .tabs').forEach(el => el.classList.remove('hidden'));
+        }
+
+        async function followFromProfile() {
+            if (!currentProfilePubkey) return;
+
+            const isFollowing = follows.includes(currentProfilePubkey);
+            if (isFollowing) {
+                unfollowUser(currentProfilePubkey);
+            } else {
+                follows.push(currentProfilePubkey);
+                displayFollows();
+                showStatus('profileStatus', '✓ Followed!', 'success');
+            }
+
+            // Update button
+            const btn = document.getElementById('profileFollowBtn');
+            btn.textContent = isFollowing ? 'Follow' : 'Unfollow';
+            btn.className = isFollowing ? '' : 'secondary';
+        }
+
+        async function followUser() {
+            const input = document.getElementById('followPubkey').value.trim();
+            if (!input) {
+                showStatus('followStatus', 'Please enter a public key', 'error');
+                return;
+            }
+
+            try {
+                const hexPubkey = await npubToHex(input);
+                if (follows.includes(hexPubkey)) {
+                    showStatus('followStatus', 'Already following', 'info');
+                    return;
+                }
+
+                follows.push(hexPubkey);
+                displayFollows();
+                document.getElementById('followPubkey').value = '';
+                showStatus('followStatus', '✓ Followed!', 'success');
+            } catch (error) {
+                showStatus('followStatus', `✗ ${error.message}`, 'error');
+            }
+        }
+
+        async function npubToHex(input) {
+            if (input.startsWith('npub')) {
+                const decoded = NostrTools.nip19.decode(input);
+                return decoded.data;
+            }
+            if (!/^[0-9a-f]{64}$/i.test(input)) throw new Error('Invalid public key');
+            return input;
+        }
+
+        function displayFollows() {
+            const list = document.getElementById('followsList');
+            if (follows.length === 0) {
+                list.innerHTML = '<div style="color: #888; margin-top: 10px;">No follows yet</div>';
+                return;
+            }
+
+            list.innerHTML = follows.map(pubkey => {
+                const short = pubkey.substring(0, 8) + '...' + pubkey.substring(pubkey.length - 8);
+                return `
+                    <div style="background: #1a1a1a; padding: 10px; margin: 5px 0; border-radius: 4px; display: flex; justify-content: space-between;">
+                        <span style="color: #bb86fc; cursor: pointer;" onclick="viewProfile('${pubkey}')">${short}</span>
+                        <button onclick="unfollowUser('${pubkey}')" style="padding: 5px 10px; font-size: 12px;">Unfollow</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function unfollowUser(pubkey) {
+            follows = follows.filter(p => p !== pubkey);
+            displayFollows();
+            showStatus('followStatus', '✓ Unfollowed', 'success');
+
+            if (currentProfilePubkey === pubkey) {
+                document.getElementById('profileFollowBtn').textContent = 'Follow';
+                document.getElementById('profileFollowBtn').className = '';
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        displayFollows();
+    </script>
+</body>
+</html>

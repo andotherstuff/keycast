@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast OAuth Test Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="url"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="url"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+            border-left: 4px solid #1976d2;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            border-left: 4px solid #2e7d32;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+            border-left: 4px solid #c62828;
+        }
+
+        .status.warning {
+            background: #fff3e0;
+            color: #ef6c00;
+            border-left: 4px solid #ef6c00;
+        }
+
+        .code-block {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            margin-top: 10px;
+            word-break: break-all;
+        }
+
+        .steps {
+            list-style: none;
+            counter-reset: step-counter;
+        }
+
+        .steps li {
+            counter-increment: step-counter;
+            margin-bottom: 15px;
+            padding-left: 35px;
+            position: relative;
+            color: #555;
+        }
+
+        .steps li::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: 0;
+            top: 0;
+            background: #667eea;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Keycast OAuth Test Client</h1>
+        <p class="subtitle">Test the OAuth 2.0 authorization flow and receive a NIP-46 bunker URL</p>
+
+        <!-- Configuration Section -->
+        <div class="section">
+            <h2>⚙️ Configuration</h2>
+            <div class="form-group">
+                <label for="apiUrl">API Base URL</label>
+                <input type="url" id="apiUrl" value="http://localhost:3000" placeholder="http://localhost:3000">
+            </div>
+            <div class="form-group">
+                <label for="clientId">Client ID</label>
+                <input type="text" id="clientId" value="test-client-webapp" placeholder="my-app-name">
+            </div>
+            <div class="form-group">
+                <label for="redirectUri">Redirect URI</label>
+                <input type="url" id="redirectUri" value="http://localhost:8000/callback" placeholder="http://localhost:8000/callback">
+            </div>
+            <div class="form-group">
+                <label for="scope">Scope (space-separated)</label>
+                <input type="text" id="scope" value="sign_event encrypt decrypt" placeholder="sign_event encrypt decrypt">
+            </div>
+        </div>
+
+        <!-- Step 1: Register User -->
+        <div class="section">
+            <h2>Step 1: Register User (Optional)</h2>
+            <p style="margin-bottom: 15px; color: #666; font-size: 14px;">
+                Register a new user to test with, or skip if you already have an account.
+            </p>
+            <div class="form-group">
+                <label for="registerEmail">Email</label>
+                <input type="text" id="registerEmail" placeholder="test@example.com">
+            </div>
+            <div class="form-group">
+                <label for="registerPassword">Password</label>
+                <input type="text" id="registerPassword" placeholder="password123">
+            </div>
+            <button onclick="registerUser()">Register New User</button>
+            <div id="registerStatus"></div>
+        </div>
+
+        <!-- Step 2: Start OAuth Flow -->
+        <div class="section">
+            <h2>Step 2: Start OAuth Flow</h2>
+            <p style="margin-bottom: 15px; color: #666; font-size: 14px;">
+                This will simulate the OAuth authorization flow. You'll need to manually approve the authorization.
+            </p>
+            <div class="button-group">
+                <button onclick="startOAuthFlow()">Start OAuth Flow</button>
+                <button onclick="simulateFullFlow()">Simulate Full Flow (Auto)</button>
+            </div>
+            <div id="oauthStatus"></div>
+        </div>
+
+        <!-- Step 3: Manual Authorization -->
+        <div class="section hidden" id="manualAuthSection">
+            <h2>Step 3: Approve Authorization</h2>
+            <p style="margin-bottom: 15px; color: #666; font-size: 14px;">
+                Click approve to grant the application access, or deny to reject.
+            </p>
+            <div class="button-group">
+                <button onclick="approveAuthorization()">✓ Approve</button>
+                <button onclick="denyAuthorization()" style="background: linear-gradient(135deg, #ef5350 0%, #e53935 100%);">✗ Deny</button>
+            </div>
+            <div id="approveStatus"></div>
+        </div>
+
+        <!-- Step 4: Results -->
+        <div class="section hidden" id="resultsSection">
+            <h2>✨ Success! Bunker URL Received</h2>
+            <div id="bunkerUrlDisplay"></div>
+        </div>
+
+        <!-- How it Works -->
+        <div class="section">
+            <h2>📖 How OAuth Flow Works</h2>
+            <ol class="steps">
+                <li>Client initiates OAuth by redirecting user to authorization endpoint</li>
+                <li>User logs in (if not already authenticated)</li>
+                <li>User approves or denies the authorization request</li>
+                <li>Server generates authorization code and redirects back to client</li>
+                <li>Client exchanges authorization code for bunker URL</li>
+                <li>Client can now use the bunker URL for NIP-46 remote signing</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        let apiUrl, clientId, redirectUri, scope;
+        let jwtToken = null;
+        let authCode = null;
+
+        function getConfig() {
+            apiUrl = document.getElementById('apiUrl').value;
+            clientId = document.getElementById('clientId').value;
+            redirectUri = document.getElementById('redirectUri').value;
+            scope = document.getElementById('scope').value;
+        }
+
+        function showStatus(elementId, message, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        async function registerUser() {
+            getConfig();
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+
+            if (!email || !password) {
+                showStatus('registerStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            showStatus('registerStatus', 'Registering user...', 'info');
+
+            try {
+                const response = await fetch(`${apiUrl}/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    jwtToken = data.token;
+                    showStatus('registerStatus',
+                        `✓ User registered successfully!<br><small>JWT Token: ${jwtToken.substring(0, 30)}...</small>`,
+                        'success');
+                } else {
+                    showStatus('registerStatus',
+                        `Registration failed: ${data.error || 'Unknown error'}`,
+                        'error');
+                }
+            } catch (error) {
+                showStatus('registerStatus', `Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function startOAuthFlow() {
+            getConfig();
+
+            showStatus('oauthStatus',
+                `Starting OAuth flow...<br>
+                <small>Client ID: ${clientId}<br>
+                Redirect URI: ${redirectUri}<br>
+                Scope: ${scope}</small>`,
+                'info');
+
+            // Show manual authorization section
+            document.getElementById('manualAuthSection').classList.remove('hidden');
+
+            showStatus('oauthStatus',
+                `OAuth flow initiated. Please approve or deny the authorization below.`,
+                'success');
+        }
+
+        async function approveAuthorization() {
+            getConfig();
+
+            if (!jwtToken) {
+                showStatus('approveStatus', 'Please register a user first to get a JWT token', 'error');
+                return;
+            }
+
+            showStatus('approveStatus', 'Sending approval...', 'info');
+
+            try {
+                const response = await fetch(`${apiUrl}/oauth/authorize`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cookie': `session=${jwtToken}`
+                    },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        redirect_uri: redirectUri,
+                        scope: scope,
+                        approved: true
+                    }),
+                    redirect: 'manual'
+                });
+
+                // Check for redirect (3xx status)
+                if (response.status >= 300 && response.status < 400) {
+                    const location = response.headers.get('Location');
+                    if (location && location.includes('code=')) {
+                        authCode = new URL(location).searchParams.get('code');
+                        showStatus('approveStatus',
+                            `✓ Authorization approved!<br>
+                            <small>Redirect URL: ${location}</small><br>
+                            <small>Authorization Code: ${authCode}</small>`,
+                            'success');
+
+                        // Now exchange the code for bunker URL
+                        await exchangeCodeForBunker();
+                    } else {
+                        showStatus('approveStatus',
+                            `Unexpected redirect: ${location}`,
+                            'error');
+                    }
+                } else {
+                    const text = await response.text();
+                    showStatus('approveStatus',
+                        `Unexpected response (${response.status}): ${text}`,
+                        'error');
+                }
+            } catch (error) {
+                showStatus('approveStatus', `Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function denyAuthorization() {
+            getConfig();
+
+            if (!jwtToken) {
+                showStatus('approveStatus', 'Please register a user first to get a JWT token', 'error');
+                return;
+            }
+
+            showStatus('approveStatus', 'Sending denial...', 'info');
+
+            try {
+                const response = await fetch(`${apiUrl}/oauth/authorize`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cookie': `session=${jwtToken}`
+                    },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        redirect_uri: redirectUri,
+                        scope: scope,
+                        approved: false
+                    }),
+                    redirect: 'manual'
+                });
+
+                if (response.status >= 300 && response.status < 400) {
+                    const location = response.headers.get('Location');
+                    showStatus('approveStatus',
+                        `Authorization denied. Redirect: ${location}`,
+                        'warning');
+                }
+            } catch (error) {
+                showStatus('approveStatus', `Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function exchangeCodeForBunker() {
+            getConfig();
+
+            if (!authCode) {
+                showStatus('approveStatus', 'No authorization code available', 'error');
+                return;
+            }
+
+            showStatus('approveStatus', 'Exchanging authorization code for bunker URL...', 'info');
+
+            try {
+                const response = await fetch(`${apiUrl}/oauth/token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code: authCode,
+                        client_id: clientId,
+                        redirect_uri: redirectUri
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.bunker_url) {
+                    showStatus('approveStatus', '✓ Token exchange successful!', 'success');
+
+                    // Show results section
+                    document.getElementById('resultsSection').classList.remove('hidden');
+                    document.getElementById('bunkerUrlDisplay').innerHTML =
+                        `<p style="margin-bottom: 10px; color: #666;">Your NIP-46 Bunker URL:</p>
+                        <div class="code-block">${data.bunker_url}</div>
+                        <p style="margin-top: 15px; color: #666; font-size: 14px;">
+                            ✓ You can now use this bunker URL in Nostr clients for remote signing!
+                        </p>`;
+                } else {
+                    showStatus('approveStatus',
+                        `Token exchange failed: ${data.error || 'Unknown error'}`,
+                        'error');
+                }
+            } catch (error) {
+                showStatus('approveStatus', `Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function simulateFullFlow() {
+            getConfig();
+
+            // Step 1: Register user if not already done
+            if (!jwtToken) {
+                const email = `test-${Date.now()}@example.com`;
+                const password = 'testpass123';
+
+                showStatus('oauthStatus', `Auto-registering user: ${email}...`, 'info');
+
+                try {
+                    const response = await fetch(`${apiUrl}/auth/register`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        jwtToken = data.token;
+                    } else {
+                        showStatus('oauthStatus',
+                            `Auto-registration failed: ${data.error || 'Unknown error'}`,
+                            'error');
+                        return;
+                    }
+                } catch (error) {
+                    showStatus('oauthStatus', `Error during registration: ${error.message}`, 'error');
+                    return;
+                }
+            }
+
+            // Step 2: Approve authorization
+            showStatus('oauthStatus', 'Auto-approving authorization...', 'info');
+            document.getElementById('manualAuthSection').classList.remove('hidden');
+            await approveAuthorization();
+        }
+    </script>
+</body>
+</html>

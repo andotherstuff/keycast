@@ -223,6 +223,8 @@ pub async fn token(
 
     // Create authorization in database
     let relay_url = "wss://relay.damus.io"; // TODO: Get from config
+    let relays_json = serde_json::to_string(&vec![relay_url])
+        .map_err(|e| OAuthError::InvalidRequest(format!("Failed to serialize relays: {}", e)))?;
 
     sqlx::query(
         "INSERT INTO oauth_authorizations (user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, created_at, updated_at)
@@ -233,7 +235,7 @@ pub async fn token(
     .bind(bunker_public_key.to_hex())
     .bind(&encrypted_user_key)      // bunker_secret = encrypted user key (BLOB)
     .bind(&connection_secret)        // secret = connection secret (TEXT)
-    .bind(relay_url)
+    .bind(&relays_json)
     .bind(Utc::now())
     .bind(Utc::now())
     .execute(pool)

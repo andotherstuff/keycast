@@ -9,11 +9,68 @@ use std::sync::Arc;
 
 use crate::api::http::{auth, oauth, teams};
 use crate::state::KeycastState;
+use axum::response::Html;
 
 // State wrapper to pass state to auth handlers
 #[derive(Clone)]
 pub struct AuthState {
     pub state: Arc<KeycastState>,
+}
+
+async fn landing_page() -> Html<&'static str> {
+    Html(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Keycast OAuth Server</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+               max-width: 800px; margin: 50px auto; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+        h1 { color: #bb86fc; }
+        h2 { color: #03dac6; margin-top: 30px; }
+        a { color: #03dac6; }
+        code { background: #2a2a2a; padding: 2px 6px; border-radius: 3px; }
+        .endpoint { background: #2a2a2a; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .method { color: #bb86fc; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🔑 Keycast OAuth Server</h1>
+    <p>NIP-46 remote signing with OAuth 2.0 authorization</p>
+
+    <h2>Authentication Endpoints</h2>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/auth/register</code><br>
+        Register a new user with email/password
+    </div>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/auth/login</code><br>
+        Login and receive JWT token
+    </div>
+    <div class="endpoint">
+        <span class="method">GET</span> <code>/api/user/bunker</code><br>
+        Get personal NIP-46 bunker URL (requires auth)
+    </div>
+
+    <h2>OAuth 2.0 Endpoints</h2>
+    <div class="endpoint">
+        <span class="method">GET</span> <code>/api/oauth/authorize</code><br>
+        Authorization request (shows approval page)
+    </div>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/oauth/authorize</code><br>
+        User approves/denies authorization
+    </div>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/oauth/token</code><br>
+        Exchange authorization code for bunker URL
+    </div>
+
+    <h2>Test Clients</h2>
+    <p>Example OAuth clients available at <a href="http://localhost:8080">localhost:8080</a></p>
+</body>
+</html>
+    "#)
 }
 
 /// Build routes with explicit state - the proper way to structure an Axum app
@@ -23,6 +80,10 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
     let auth_state = AuthState {
         state,
     };
+
+    // Landing page
+    let root_route = Router::new()
+        .route("/", get(landing_page));
 
     // Public auth routes (no authentication required)
     let auth_routes = Router::new()
@@ -67,6 +128,7 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
 
     // Combine routes
     Router::new()
+        .merge(root_route)
         .merge(auth_routes)
         .merge(oauth_routes)
         .merge(user_routes)
