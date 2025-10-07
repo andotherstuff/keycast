@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast Nostr Client - OAuth + nostr-tools</title>
+    <script type="module">
+        import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey } from 'https://esm.sh/nostr-tools@2';
+        import { BunkerSigner, parseBunkerInput } from 'https://esm.sh/nostr-tools@2/nip46';
+        
+        window.SimplePool = SimplePool;
+        window.finalizeEvent = finalizeEvent;
+        window.generateSecretKey = generateSecretKey;
+        window.getPublicKey = getPublicKey;
+        window.BunkerSigner = BunkerSigner;
+        window.parseBunkerInput = parseBunkerInput;
+    </script>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+        h1 { color: #bb86fc; }
+        button { background: #bb86fc; color: #000; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+        button:hover { background: #cb96fc; }
+        input, textarea { padding: 10px; margin: 5px 0; width: 100%; background: #2a2a2a; border: 1px solid #4a4a4a; color: #e0e0e0; border-radius: 4px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .success { background: #1b5e20; color: #a5d6a7; }
+        .error { background: #b71c1c; color: #ef9a9a; }
+        .info { background: #01579b; color: #81d4fa; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <h1>🔑 Keycast Nostr Client</h1>
+    <p>OAuth + NIP-46 with nostr-tools</p>
+
+    <div id="authSection">
+        <h2>1. Authenticate</h2>
+        <input type="email" id="email" placeholder="Email" value="test@example.com">
+        <input type="password" id="password" placeholder="Password" value="password123">
+        <button onclick="register()">Register & Get Bunker</button>
+        <div id="authStatus"></div>
+    </div>
+
+    <div id="appSection" class="hidden">
+        <h2>2. Your Identity</h2>
+        <p>Pubkey: <span id="pubkey"></span></p>
+        <p>Bunker URL: <span id="bunkerUrl"></span></p>
+
+        <h2>3. Post Note</h2>
+        <textarea id="noteContent" placeholder="What's on your mind?" rows="4"></textarea>
+        <button onclick="postNote()">Post to Nostr</button>
+        <div id="postStatus"></div>
+    </div>
+
+    <script>
+        let bunkerSigner = null;
+        let pool = null;
+        let userPubkey = null;
+
+        function showStatus(id, msg, type) {
+            document.getElementById(id).innerHTML = `<div class="status ${type}">${msg}</div>`;
+        }
+
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const apiUrl = 'http://localhost:3000';
+
+            try {
+                showStatus('authStatus', 'Registering...', 'info');
+
+                // Register
+                const regResp = await fetch(`${apiUrl}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const regData = await regResp.json();
+                if (!regResp.ok) throw new Error(regData.error || 'Registration failed');
+
+                const jwtToken = regData.token;
+                showStatus('authStatus', 'Getting OAuth authorization...', 'info');
+
+                // OAuth approve
+                const approveResp = await fetch(`${apiUrl}/api/oauth/authorize`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cookie': `session=${jwtToken}`
+                    },
+                    body: JSON.stringify({
+                        client_id: 'nostr-web-client',
+                        redirect_uri: 'http://localhost:8000/callback',
+                        scope: 'sign_event',
+                        approved: true
+                    })
+                });
+                const approveData = await approveResp.json();
+                if (!approveResp.ok) throw new Error('OAuth failed');
+
+                showStatus('authStatus', 'Exchanging code for bunker URL...', 'info');
+
+                // Get bunker URL
+                const tokenResp = await fetch(`${apiUrl}/api/oauth/token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code: approveData.code,
+                        client_id: 'nostr-web-client',
+                        redirect_uri: 'http://localhost:8000/callback'
+                    })
+                });
+                const tokenData = await tokenResp.json();
+                if (!tokenResp.ok) throw new Error(tokenData.error || 'Token exchange failed');
+
+                const bunkerUrl = tokenData.bunker_url;
+                document.getElementById('bunkerUrl').textContent = bunkerUrl;
+
+                showStatus('authStatus', 'Connecting to bunker...', 'info');
+
+                // Initialize bunker signer
+                const localSecretKey = generateSecretKey();
+                const bunkerPointer = await parseBunkerInput(bunkerUrl);
+                
+                pool = new SimplePool();
+                bunkerSigner = BunkerSigner.fromBunker(localSecretKey, bunkerPointer, { pool, timeout: 10000 });
+
+                console.log('About to call bunkerSigner.connect()...');
+                try {
+                    await Promise.race([
+                        bunkerSigner.connect(),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Connect timeout after 10s')), 10000))
+                    ]);
+                } catch (connectError) {
+                    console.error('Bunker connect error:', connectError);
+                    throw new Error(`Bunker connect failed: ${connectError.message}`);
+                }
+
+                console.log('Bunker connected! Getting public key...');
+                userPubkey = await bunkerSigner.getPublicKey();
+                
+                document.getElementById('pubkey').textContent = userPubkey;
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('appSection').classList.remove('hidden');
+                
+                showStatus('authStatus', '✓ Connected! Ready to post.', 'success');
+
+            } catch (error) {
+                showStatus('authStatus', `✗ ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+
+        async function postNote() {
+            const content = document.getElementById('noteContent').value;
+            if (!content) {
+                showStatus('postStatus', 'Please enter a note', 'error');
+                return;
+            }
+
+            try {
+                showStatus('postStatus', 'Creating event...', 'info');
+
+                const event = await bunkerSigner.signEvent({
+                    kind: 1,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [],
+                    content
+                });
+
+                showStatus('postStatus', 'Publishing to relays...', 'info');
+
+                await Promise.any(pool.publish(['wss://relay.damus.io', 'wss://nos.lol'], event));
+
+                showStatus('postStatus', '✓ Note published!', 'success');
+                document.getElementById('noteContent').value = '';
+
+            } catch (error) {
+                showStatus('postStatus', `✗ ${error.message}`, 'error');
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>

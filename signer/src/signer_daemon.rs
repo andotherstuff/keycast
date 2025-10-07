@@ -335,13 +335,49 @@ impl UnifiedSigner {
             }
         };
 
-        // Decrypt the request using NIP-04
+        // Decrypt the request - try NIP-44 first, fall back to NIP-04
         let bunker_secret = handler.bunker_keys.secret_key();
-        let decrypted = nip04::decrypt(
+
+        tracing::debug!(
+            "Attempting to decrypt NIP-46 request - content_len: {}, from_pubkey: {}",
+            event.content.len(),
+            event.pubkey.to_hex()
+        );
+
+        // Try NIP-44 first (new standard), track which method worked
+        let (decrypted, use_nip44) = match nip44::decrypt(
             bunker_secret,
             &event.pubkey,
             &event.content,
-        )?;
+        ) {
+            Ok(d) => {
+                tracing::debug!("Successfully decrypted with NIP-44");
+                (d, true)
+            },
+            Err(nip44_err) => {
+                tracing::debug!("NIP-44 decrypt failed ({}), trying NIP-04...", nip44_err);
+                // Fall back to NIP-04 for backwards compatibility
+                match nip04::decrypt(
+                    bunker_secret,
+                    &event.pubkey,
+                    &event.content,
+                ) {
+                    Ok(d) => {
+                        tracing::debug!("Successfully decrypted with NIP-04");
+                        (d, false)
+                    },
+                    Err(nip04_err) => {
+                        tracing::error!(
+                            "Both NIP-44 and NIP-04 decrypt failed - NIP-44: {}, NIP-04: {} | From: {}",
+                            nip44_err,
+                            nip04_err,
+                            event.pubkey.to_hex()
+                        );
+                        return Err(nip04_err.into());
+                    }
+                }
+            }
+        };
 
         tracing::debug!("Decrypted NIP-46 request: {}", decrypted);
 
@@ -377,13 +413,24 @@ impl UnifiedSigner {
             }
         };
 
-        // Encrypt response
+        // Encrypt response using the same method as the request
         let response_str = response.to_string();
-        let encrypted_response = nip04::encrypt(
-            bunker_secret,
-            &event.pubkey,
-            &response_str,
-        )?;
+        let encrypted_response = if use_nip44 {
+            tracing::debug!("Encrypting response with NIP-44");
+            nip44::encrypt(
+                bunker_secret,
+                &event.pubkey,
+                &response_str,
+                nip44::Version::V2,
+            )?
+        } else {
+            tracing::debug!("Encrypting response with NIP-04");
+            nip04::encrypt(
+                bunker_secret,
+                &event.pubkey,
+                &response_str,
+            )?
+        };
 
         // Build and publish response event
         tracing::debug!("Sending NIP-46 response to {}", event.pubkey);
