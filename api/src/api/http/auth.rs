@@ -76,34 +76,50 @@ pub enum AuthError {
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            AuthError::Database(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Database error: {}", e),
-            ),
-            AuthError::PasswordHash(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Password hashing error".to_string(),
-            ),
+            AuthError::Database(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("Database error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service temporarily unavailable. Please try again in a few minutes.".to_string(),
+                )
+            },
+            AuthError::PasswordHash(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("Password hashing error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service temporarily unavailable. Please try again in a few minutes.".to_string(),
+                )
+            },
             AuthError::InvalidCredentials => (
                 StatusCode::UNAUTHORIZED,
-                "Invalid email or password".to_string(),
+                "Invalid email or password. Please check your credentials and try again.".to_string(),
             ),
             AuthError::EmailAlreadyExists => (
                 StatusCode::CONFLICT,
-                "Email already registered".to_string(),
+                "This email is already registered. Please log in instead.".to_string(),
             ),
             AuthError::UserNotFound => (
                 StatusCode::NOT_FOUND,
-                "User not found".to_string(),
+                "No account found with this email. Please register first.".to_string(),
             ),
-            AuthError::Encryption(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Encryption error: {}", e),
-            ),
-            AuthError::Internal(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Internal error: {}", e),
-            ),
+            AuthError::Encryption(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("Encryption error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service temporarily unavailable. Please try again in a few minutes.".to_string(),
+                )
+            },
+            AuthError::Internal(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("Internal error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service temporarily unavailable. Please try again in a few minutes.".to_string(),
+                )
+            },
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()

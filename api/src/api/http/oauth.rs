@@ -49,16 +49,30 @@ pub enum OAuthError {
 impl IntoResponse for OAuthError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            OAuthError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()),
-            OAuthError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            OAuthError::Database(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Database error: {}", e),
+            OAuthError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "Please log in to continue.".to_string()
             ),
-            OAuthError::Encryption(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Encryption error: {}", e),
+            OAuthError::InvalidRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid request: {}", msg)
             ),
+            OAuthError::Database(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("OAuth database error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service temporarily unavailable. Please try again in a few minutes.".to_string(),
+                )
+            },
+            OAuthError::Encryption(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("OAuth encryption error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Service temporarily unavailable. Please try again in a few minutes.".to_string(),
+                )
+            },
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()
