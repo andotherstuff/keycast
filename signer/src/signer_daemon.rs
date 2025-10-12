@@ -1,20 +1,14 @@
 // ABOUTME: Unified signer daemon that handles multiple NIP-46 bunker connections in a single process
 // ABOUTME: Listens for NIP-46 requests and routes them to the appropriate authorization/key
 
-use dotenv::dotenv;
-use keycast_core::encryption::file_key_manager::FileKeyManager;
-use keycast_core::encryption::gcp_key_manager::GcpKeyManager;
 use keycast_core::encryption::KeyManager;
-use keycast_core::traits::AuthorizationValidations;
 use keycast_core::types::authorization::Authorization;
 use keycast_core::types::oauth_authorization::OAuthAuthorization;
 use nostr_sdk::prelude::*;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::env;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Clone)]
 struct AuthorizationHandler {

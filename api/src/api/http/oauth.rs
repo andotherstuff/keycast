@@ -8,7 +8,6 @@ use axum::{
     Json,
 };
 use chrono::{Duration, Utc};
-use nostr_sdk::Keys;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -172,7 +171,6 @@ pub async fn token(
     Json(req): Json<TokenRequest>,
 ) -> Result<Json<TokenResponse>, OAuthError> {
     let pool = &auth_state.state.db;
-    let key_manager = auth_state.state.key_manager.as_ref();
 
     // Fetch and validate authorization code
     let auth_code: Option<(String, i64, String, String)> = sqlx::query_as(
