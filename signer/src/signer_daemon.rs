@@ -124,8 +124,8 @@ impl UnifiedSigner {
     }
 
     pub async fn connect_to_relays(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Connect to common relay
-        self.client.add_relay("wss://relay.damus.io").await?;
+        // Connect to relay
+        self.client.add_relay("wss://relay3.openvine.co").await?;
         self.client.connect().await;
 
         tracing::info!("Connected to relays");
@@ -392,14 +392,18 @@ impl UnifiedSigner {
         // Parse the JSON-RPC request
         let request: serde_json::Value = serde_json::from_str(&decrypted)?;
         let method = request["method"].as_str().ok_or("No method")?;
+        let request_id = request["id"].clone(); // Extract request ID for response
 
         // Handle different NIP-46 methods
-        let response = match method {
+        let result = match method {
             "sign_event" => {
-                handler.handle_sign_event(&request).await?
+                let signed = handler.handle_sign_event(&request).await?;
+                // handle_sign_event already returns full response with id
+                signed
             }
             "get_public_key" => {
                 serde_json::json!({
+                    "id": request_id,
                     "result": handler.user_keys.public_key().to_hex()
                 })
             }
@@ -407,19 +411,21 @@ impl UnifiedSigner {
                 // Validate secret
                 if let Some(provided_secret) = request["params"][1].as_str() {
                     if provided_secret == handler.secret {
-                        serde_json::json!({"result": "ack"})
+                        serde_json::json!({"id": request_id, "result": "ack"})
                     } else {
-                        serde_json::json!({"error": "Invalid secret"})
+                        serde_json::json!({"id": request_id, "error": "Invalid secret"})
                     }
                 } else {
-                    serde_json::json!({"result": "ack"})
+                    serde_json::json!({"id": request_id, "result": "ack"})
                 }
             }
             _ => {
                 tracing::warn!("Unsupported NIP-46 method: {}", method);
-                serde_json::json!({"error": format!("Unsupported method: {}", method)})
+                serde_json::json!({"id": request_id, "error": format!("Unsupported method: {}", method)})
             }
         };
+
+        let response = result;
 
         // Encrypt response using the same method as the request
         let response_str = response.to_string();
@@ -453,9 +459,14 @@ impl UnifiedSigner {
         ])
         .sign(&handler.bunker_keys).await?;
 
-        client.send_event(response_event).await?;
+        tracing::debug!("Sending response event {} (size: {} bytes)", response_event.id, response_event.content.len());
 
-        tracing::info!("Sent NIP-46 response for request {}", event.id);
+        let send_result = client.send_event(response_event.clone()).await.map_err(|e| {
+            tracing::error!("Failed to send response event: {:?}", e);
+            e
+        })?;
+
+        tracing::info!("Sent NIP-46 response for request {} (send_result: {:?})", event.id, send_result);
 
         Ok(())
     }
@@ -465,25 +476,56 @@ impl AuthorizationHandler {
     async fn handle_sign_event(&self, request: &serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         // Parse the unsigned event from params
         let event_json = request["params"][0].as_str().ok_or("No event in params")?;
-        let unsigned_event: Event = serde_json::from_str(event_json)?;
+        let unsigned_event: serde_json::Value = serde_json::from_str(event_json)?;
+
+        // Extract fields from unsigned event
+        let kind = unsigned_event["kind"].as_u64().ok_or("Missing kind")? as u16;
+        let content = unsigned_event["content"].as_str().ok_or("Missing content")?;
+        let created_at = unsigned_event["created_at"].as_u64().ok_or("Missing created_at")?;
+        let tags_json = unsigned_event["tags"].as_array().ok_or("Missing tags")?;
+
+        // Parse tags
+        let mut tags = Vec::new();
+        for tag_arr in tags_json {
+            if let Some(arr) = tag_arr.as_array() {
+                let tag_strs: Vec<String> = arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                if !tag_strs.is_empty() {
+                    tags.push(Tag::parse(tag_strs)?);
+                }
+            }
+        }
 
         tracing::info!(
             "Signing event kind {} for authorization {}",
-            unsigned_event.kind,
+            kind,
             self.authorization_id
         );
 
         // TODO: Validate permissions/policy
 
+        tracing::debug!("Building event to sign: kind={}, content_len={}, tags_count={}", kind, content.len(), tags.len());
+
         // Sign the event with user keys
         let signed_event = EventBuilder::new(
-            unsigned_event.kind,
-            unsigned_event.content.clone()
+            Kind::from(kind),
+            content
         )
-        .tags(unsigned_event.tags.clone())
-        .sign(&self.user_keys).await?;
+        .tags(tags)
+        .custom_created_at(Timestamp::from(created_at))
+        .sign(&self.user_keys).await.map_err(|e| {
+            tracing::error!("Failed to sign event: {:?}", e);
+            e
+        })?;
+
+        tracing::debug!("Successfully signed event: {}", signed_event.id);
+
+        // Extract request ID to include in response
+        let request_id = request["id"].clone();
 
         Ok(serde_json::json!({
+            "id": request_id,
             "result": serde_json::to_string(&signed_event)?
         }))
     }

@@ -45,6 +45,9 @@
         <p>Pubkey: <span id="pubkey"></span></p>
         <p>Bunker URL: <span id="bunkerUrl"></span></p>
 
+        <h2>Debug Info</h2>
+        <pre id="debugInfo" style="background: #2a2a2a; padding: 10px; border-radius: 4px; font-size: 11px; overflow-x: auto;"></pre>
+
         <h2>3. Post Note</h2>
         <textarea id="noteContent" placeholder="What's on your mind?" rows="4"></textarea>
         <button onclick="postNote()">Post to Nostr</button>
@@ -110,25 +113,48 @@
                     })
                 });
                 const tokenData = await tokenResp.json();
+                console.log('Token response:', tokenData);
+                console.log('Token response keys:', Object.keys(tokenData));
+                console.log('bunker_url in response:', tokenData.bunker_url);
                 if (!tokenResp.ok) throw new Error(tokenData.error || 'Token exchange failed');
 
                 const bunkerUrl = tokenData.bunker_url;
+                console.log('bunkerUrl extracted:', bunkerUrl);
+                if (!bunkerUrl) {
+                    throw new Error('No bunker_url in token response!');
+                }
                 document.getElementById('bunkerUrl').textContent = bunkerUrl;
 
                 showStatus('authStatus', 'Connecting to bunker...', 'info');
 
                 // Initialize bunker signer
                 const localSecretKey = generateSecretKey();
+                console.log('Local secret key:', Array.from(localSecretKey).map(b => b.toString(16).padStart(2, '0')).join(''));
+
                 const bunkerPointer = await parseBunkerInput(bunkerUrl);
-                
+                console.log('Bunker pointer:', bunkerPointer);
+                console.log('Bunker pointer relay:', bunkerPointer.relay);
+                console.log('Bunker pointer relays:', bunkerPointer.relays);
+
+                const relayUrl = bunkerPointer.relays?.[0] || bunkerPointer.relay;
+                console.log('Using relay URL:', relayUrl);
+
                 pool = new SimplePool();
-                bunkerSigner = BunkerSigner.fromBunker(localSecretKey, bunkerPointer, { pool, timeout: 10000 });
+                console.log('SimplePool created');
+
+                // Try connecting to relay first
+                console.log('Connecting pool to relay...');
+                await pool.ensureRelay(relayUrl);
+                console.log('Pool connected to relay');
+
+                bunkerSigner = BunkerSigner.fromBunker(localSecretKey, bunkerPointer, { pool, timeout: 30000 });
+                console.log('BunkerSigner created');
 
                 console.log('About to call bunkerSigner.connect()...');
                 try {
                     await Promise.race([
                         bunkerSigner.connect(),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('Connect timeout after 10s')), 10000))
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Connect timeout after 30s')), 30000))
                     ]);
                 } catch (connectError) {
                     console.error('Bunker connect error:', connectError);
@@ -137,11 +163,22 @@
 
                 console.log('Bunker connected! Getting public key...');
                 userPubkey = await bunkerSigner.getPublicKey();
-                
+
                 document.getElementById('pubkey').textContent = userPubkey;
+
+                // Display debug info
+                const debugInfo = {
+                    'Local Pubkey': getPublicKey(localSecretKey),
+                    'Bunker Pubkey': bunkerPointer.pubkey,
+                    'Relay': relayUrl,
+                    'Secret (first 8 chars)': bunkerPointer.secret.substring(0, 8) + '...',
+                    'User Pubkey': userPubkey
+                };
+                document.getElementById('debugInfo').textContent = JSON.stringify(debugInfo, null, 2);
+
                 document.getElementById('authSection').classList.add('hidden');
                 document.getElementById('appSection').classList.remove('hidden');
-                
+
                 showStatus('authStatus', '✓ Connected! Ready to post.', 'success');
 
             } catch (error) {

@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Keycast Nostr Client (OAuth)</title>
     <script type="module">
-        import NDK, { NDKEvent, NDKNip46Signer } from 'https://esm.sh/@nostr-dev-kit/ndk@2';
+        import NDK, { NDKEvent, NDKNip46Signer, NDKPrivateKeySigner } from 'https://esm.sh/@nostr-dev-kit/ndk@2';
         window.NDK = NDK;
         window.NDKEvent = NDKEvent;
         window.NDKNip46Signer = NDKNip46Signer;
+        window.NDKPrivateKeySigner = NDKPrivateKeySigner;
     </script>
     <style>
         * {
@@ -458,12 +459,17 @@
                 showStatus('postStatus', '📡 Connected to relays', 'info');
 
                 // Create NDK signer using bunker URL
-                const signer = new NDKNip46Signer(ndk, bunkerPubkey, {
-                    secret: secret
-                });
+                // NDK's NIP-46 signer needs a local signer for the app side
+                const localSigner = NDKPrivateKeySigner.generate();
+                const signer = new NDKNip46Signer(ndk, bunkerPubkey, localSigner);
 
-                // Wait for signer to be ready
-                await signer.blockUntilReady();
+                // Set the secret token
+                signer.token = secret;
+
+                // Create an NDKUser for the bunker pubkey
+                const remoteUser = ndk.getUser({ pubkey: bunkerPubkey });
+                signer.remoteUser = remoteUser;
+
                 showStatus('postStatus', '✓ NIP-46 signer ready', 'success');
 
                 // Create note event
@@ -471,6 +477,7 @@
                 ndkEvent.kind = 1;
                 ndkEvent.content = content;
                 ndkEvent.tags = [];
+                ndkEvent.pubkey = bunkerPubkey; // Set the pubkey directly
 
                 showStatus('postStatus', '✍️ Signing event via bunker...', 'info');
 

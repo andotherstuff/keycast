@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manual Bunker Test</title>
+    <script type="module">
+        import { SimplePool, getPublicKey, generateSecretKey, finalizeEvent } from 'https://esm.sh/nostr-tools@2.10.2';
+        import * as nip04 from 'https://esm.sh/nostr-tools@2.10.2/nip04';
+        import * as nip44 from 'https://esm.sh/nostr-tools@2.10.2/nip44';
+
+        window.SimplePool = SimplePool;
+        window.getPublicKey = getPublicKey;
+        window.generateSecretKey = generateSecretKey;
+        window.finalizeEvent = finalizeEvent;
+        window.nip04 = nip04;
+        window.nip44 = nip44;
+    </script>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+        textarea { width: 100%; height: 100px; background: #2a2a2a; color: #e0e0e0; border: 1px solid #4a4a4a; }
+        button { background: #bb86fc; color: #000; padding: 10px 20px; margin: 5px; border: none; cursor: pointer; }
+        pre { background: #2a2a2a; padding: 10px; border: 1px solid #4a4a4a; overflow-x: auto; }
+        .log { margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <h1>Manual NIP-46 Test</h1>
+
+    <h2>1. Bunker URL</h2>
+    <textarea id="bunkerUrl" placeholder="Paste bunker URL here">bunker://9b687068e9c3cc6d8b413ed1f0e992f01b1c08a276d4f1dc94fbd9049e37c10e?relay=wss://relay.damus.io&secret=W20J7bJdF64qwANAjcww6bwejmzuBxDM</textarea>
+
+    <h2>2. Test Actions</h2>
+    <button onclick="testConnect()">1. Send Connect Request</button>
+    <button onclick="testListen()">2. Listen for Responses</button>
+    <button onclick="testBoth()">3. Both (Connect + Listen)</button>
+
+    <h2>3. Logs</h2>
+    <div id="logs"></div>
+
+    <script>
+        let pool = null;
+        let localSk = null;
+        let bunkerPubkey = null;
+        let relayUrl = null;
+        let secret = null;
+        let conversationKey = null;
+
+        function log(msg) {
+            const div = document.createElement('div');
+            div.className = 'log';
+            div.textContent = `[${new Date().toISOString().substr(11,12)}] ${msg}`;
+            document.getElementById('logs').appendChild(div);
+            console.log(msg);
+        }
+
+        function parseBunkerUrl(url) {
+            // bunker://pubkey?relay=url&secret=secret
+            const match = url.match(/bunker:\/\/([0-9a-f]+)\?relay=([^&]+)&secret=([^&]+)/);
+            if (!match) throw new Error('Invalid bunker URL');
+            return {
+                pubkey: match[1],
+                relay: match[2],
+                secret: match[3]
+            };
+        }
+
+        async function testConnect() {
+            document.getElementById('logs').innerHTML = '';
+            log('=== Test Connect ===');
+
+            const bunkerUrlText = document.getElementById('bunkerUrl').value.trim();
+            const parsed = parseBunkerUrl(bunkerUrlText);
+            bunkerPubkey = parsed.pubkey;
+            relayUrl = parsed.relay;
+            secret = parsed.secret;
+
+            log(`Bunker pubkey: ${bunkerPubkey}`);
+            log(`Relay: ${relayUrl}`);
+            log(`Secret: ${secret.substring(0, 8)}...`);
+
+            // Generate local key
+            localSk = generateSecretKey();
+            const localPk = getPublicKey(localSk);
+            log(`Local pubkey: ${localPk}`);
+
+            // Calculate conversation key (NIP-44 shared secret)
+            conversationKey = nip44.getConversationKey(localSk, bunkerPubkey);
+            log(`Conversation key calculated`);
+
+            // Create pool
+            pool = new SimplePool();
+            await pool.ensureRelay(relayUrl);
+            log('Connected to relay');
+
+            // Build connect request
+            const requestId = Math.random().toString(36).substring(7);
+            const request = {
+                id: requestId,
+                method: 'connect',
+                params: [bunkerPubkey, secret]
+            };
+
+            log(`Request ID: ${requestId}`);
+            log(`Request: ${JSON.stringify(request)}`);
+
+            // Encrypt request
+            const encrypted = nip44.encrypt(JSON.stringify(request), conversationKey);
+            log(`Encrypted length: ${encrypted.length}`);
+
+            // Build event
+            const event = {
+                kind: 24133,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [['p', bunkerPubkey]],
+                content: encrypted
+            };
+
+            // Sign event
+            const signedEvent = finalizeEvent(event, localSk);
+            log(`Signed event ID: ${signedEvent.id}`);
+
+            // Publish
+            await pool.publish([relayUrl], signedEvent);
+            log('✓ Published connect request');
+            log('Now run "Listen for Responses" to see the reply');
+        }
+
+        async function testListen() {
+            if (!pool || !localSk || !bunkerPubkey) {
+                log('ERROR: Run "Send Connect Request" first!');
+                return;
+            }
+
+            log('=== Test Listen ===');
+            const localPk = getPublicKey(localSk);
+            log(`Listening for responses to: ${localPk}`);
+            log(`From bunker: ${bunkerPubkey}`);
+
+            const filter = {
+                kinds: [24133],
+                authors: [bunkerPubkey],
+                '#p': [localPk],
+                since: Math.floor(Date.now() / 1000) - 60
+            };
+
+            log(`Filter: ${JSON.stringify(filter, null, 2)}`);
+
+            const sub = pool.subscribeMany([relayUrl], [filter], {
+                onevent(event) {
+                    log(`📨 Received event: ${event.id}`);
+                    log(`  From: ${event.pubkey}`);
+                    log(`  Content length: ${event.content.length}`);
+
+                    try {
+                        // Try to decrypt
+                        const decrypted = nip44.decrypt(event.content, conversationKey);
+                        log(`✓ Decrypted: ${decrypted}`);
+
+                        const response = JSON.parse(decrypted);
+                        log(`✓ Response: ${JSON.stringify(response, null, 2)}`);
+                    } catch (e) {
+                        log(`✗ Decrypt failed: ${e.message}`);
+                    }
+                },
+                oneose() {
+                    log('EOSE received');
+                }
+            });
+
+            log('✓ Subscription active');
+            log('Waiting for events...');
+
+            // Keep subscription open
+            setTimeout(() => {
+                log('Subscription still active...');
+            }, 5000);
+        }
+
+        async function testBoth() {
+            await testConnect();
+            setTimeout(() => testListen(), 1000);
+        }
+    </script>
+</body>
+</html>

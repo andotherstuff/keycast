@@ -4,7 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-01-12
+
 ### Added
+- Dual NIP-04/NIP-44 encryption support in signer daemon with automatic fallback
+- Immediate signer reload signal mechanism via `.reload_signal` file for faster OAuth onboarding
+- OAuth + NIP-46 signing test clients (NDK and nostr-tools versions)
+- Working OAuth sign test client demonstrating complete flow
+- Manual bunker test client for debugging NIP-46 connections
+- Comprehensive project documentation:
+  - `DEVELOPMENT.md` - Local testing and deployment guide
+  - `ISSUES.md` - Production readiness tracking (26 issues catalogued)
+  - `MONITORING.md` - Cloud logging and error monitoring setup
+  - `SECURITY.md` - Security model, limitations, and best practices
+- Docker Compose dev environment configuration
+
+### Changed
+- Signer daemon now tries NIP-44 encryption first, falls back to NIP-04 for backward compatibility
+- OAuth token endpoint triggers immediate signer reload instead of waiting for polling cycle
+- Enhanced OAuth test clients with better error handling and debug output
+- Response encryption matches request encryption method (NIP-44 or NIP-04)
+
+### Fixed
+- NIP-46 signer compatibility with clients using different encryption standards
+- OAuth authorization flow now properly returns authorization codes
+- Signer daemon reload latency reduced from ~10 seconds to <100ms
+
+### Documentation
 - Personal authentication system with email/password registration and login
 - JWT-based authentication with 24-hour token expiration
 - Automatic login after registration (returns JWT token immediately)

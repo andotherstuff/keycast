@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  keycast-api:
+    build:
+      context: .
+      args:
+        - VITE_DOMAIN=http://localhost:5173
+        - VITE_ALLOWED_PUBKEYS=
+    command: api
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./database:/app/database
+      - ./master.key:/app/master.key
+    environment:
+      - RUST_LOG=debug
+      - CORS_ALLOWED_ORIGIN=http://localhost:5173
+      - APP_URL=http://localhost:3000
+      - USE_GCP_KMS=false
+      - MASTER_KEY_PATH=/app/master.key
+      - FROM_EMAIL=test@localhost
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  keycast-web:
+    build:
+      context: .
+      args:
+        - VITE_DOMAIN=http://localhost:3000
+        - VITE_ALLOWED_PUBKEYS=
+    command: web
+    ports:
+      - "5173:5173"
+    depends_on:
+      keycast-api:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development
+      - HOST=0.0.0.0
+      - PORT=5173
+
+  # Test runner service
+  test:
+    build:
+      context: .
+      target: rust-builder
+    command: cargo test --workspace
+    volumes:
+      - ./api:/app/api
+      - ./core:/app/core
+      - ./signer:/app/signer
+      - ./database:/app/database
+    environment:
+      - RUST_LOG=debug
+      - DATABASE_URL=sqlite:../database/keycast_test.db

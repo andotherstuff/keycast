@@ -1,0 +1,13 @@
+{
+  "name": "keycast-e2e-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for Keycast OAuth flow",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}

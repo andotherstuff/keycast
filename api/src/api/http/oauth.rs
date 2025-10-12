@@ -222,7 +222,7 @@ pub async fn token(
         .collect();
 
     // Create authorization in database
-    let relay_url = "wss://relay.damus.io"; // TODO: Get from config
+    let relay_url = "wss://relay3.openvine.co";
     let relays_json = serde_json::to_string(&vec![relay_url])
         .map_err(|e| OAuthError::InvalidRequest(format!("Failed to serialize relays: {}", e)))?;
 
