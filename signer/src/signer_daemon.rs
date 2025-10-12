@@ -118,8 +118,8 @@ impl UnifiedSigner {
     }
 
     pub async fn connect_to_relays(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Connect to relay
-        self.client.add_relay("wss://relay3.openvine.co").await?;
+        // Connect to relay that supports NIP-46 (kind 24133)
+        self.client.add_relay("wss://relay.damus.io").await?;
         self.client.connect().await;
 
         tracing::info!("Connected to relays");

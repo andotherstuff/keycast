@@ -303,7 +303,7 @@ pub async fn get_bunker_url(
 
     let (public_key, bunker_secret) = result.ok_or(AuthError::UserNotFound)?;
 
-    let relay_url = "wss://relay3.openvine.co";
+    let relay_url = "wss://relay.damus.io";
 
     let bunker_url = format!(
         "bunker://{}?relay={}&secret={}",

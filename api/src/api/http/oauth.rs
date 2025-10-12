@@ -233,8 +233,8 @@ pub async fn token(
         .map(char::from)
         .collect();
 
-    // Create authorization in database
-    let relay_url = "wss://relay3.openvine.co";
+    // Create authorization in database - use relay that supports NIP-46
+    let relay_url = "wss://relay.damus.io";
     let relays_json = serde_json::to_string(&vec![relay_url])
         .map_err(|e| OAuthError::InvalidRequest(format!("Failed to serialize relays: {}", e)))?;
 
