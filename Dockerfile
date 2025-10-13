@@ -89,6 +89,9 @@ COPY --from=web-builder /app/node_modules ./node_modules
 # Copy database migrations
 COPY ./database ./database
 
+# Copy example HTML files for testing
+COPY ./examples ./examples
+
 # Set environment variables
 ENV NODE_ENV=production \
     BUN_ENV=production \
