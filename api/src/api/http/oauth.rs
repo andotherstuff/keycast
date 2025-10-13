@@ -4,8 +4,8 @@
 use axum::{
     extract::{Query, State},
     http::StatusCode,
-    response::{IntoResponse, Redirect, Response},
-    Json,
+    response::{IntoResponse, Redirect, Response, Html},
+    Form, Json,
 };
 use chrono::{Duration, Utc};
 use rand::Rng;
@@ -100,6 +100,7 @@ pub async fn authorize_get(
 /// User approves authorization, creates code and redirects back to app OR returns code directly
 pub async fn authorize_post(
     State(auth_state): State<super::routes::AuthState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ApproveRequest>,
 ) -> Result<Response, OAuthError> {
     if !req.approved {
@@ -110,14 +111,9 @@ pub async fn authorize_post(
         .into_response());
     }
 
-    // TODO: Get user_public_key from JWT session
-    // For now, get the most recent user for testing
-    let user_public_key: Option<String> =
-        sqlx::query_scalar("SELECT public_key FROM users ORDER BY created_at DESC LIMIT 1")
-            .fetch_optional(&auth_state.state.db)
-            .await?;
-
-    let user_public_key = user_public_key.ok_or(OAuthError::Unauthorized)?;
+    // Extract user public key from JWT token in Authorization header
+    let user_public_key = super::auth::extract_user_from_token(&headers)
+        .map_err(|_| OAuthError::Unauthorized)?;
 
     // Generate authorization code
     let code: String = rand::thread_rng()
@@ -254,7 +250,7 @@ pub async fn token(
     .await?;
 
     // Signal signer daemon to reload immediately
-    let signal_file = std::path::Path::new("database/.reload_signal");
+    let signal_file = std::path::Path::new("../database/.reload_signal");
     let _ = std::fs::File::create(signal_file);
     tracing::info!("Created reload signal for signer daemon");
 
@@ -267,4 +263,391 @@ pub async fn token(
     );
 
     Ok(Json(TokenResponse { bunker_url }))
+}
+
+// ============================================================================
+// nostr-login Integration Handlers
+// ============================================================================
+
+/// Nostr Connect parameters from nostrconnect:// URI
+#[derive(Debug, Deserialize)]
+pub struct NostrConnectParams {
+    pub relay: String,
+    pub secret: String,
+    pub perms: Option<String>,
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub image: Option<String>,
+}
+
+/// Form data for connect approval
+#[derive(Debug, Deserialize)]
+pub struct ConnectApprovalForm {
+    pub client_pubkey: String,
+    pub relay: String,
+    pub secret: String,
+    pub perms: Option<String>,
+    pub approved: bool,
+}
+
+/// Parse nostrconnect:// URI from path
+/// Format: nostrconnect://CLIENT_PUBKEY?relay=RELAY&secret=SECRET&perms=...
+fn parse_nostrconnect_uri(uri: &str) -> Result<(String, NostrConnectParams), OAuthError> {
+    // Remove nostrconnect:// prefix
+    let uri = uri.strip_prefix("nostrconnect://")
+        .ok_or_else(|| OAuthError::InvalidRequest("Invalid nostrconnect URI".to_string()))?;
+
+    // Split pubkey and query params
+    let parts: Vec<&str> = uri.split('?').collect();
+    if parts.len() != 2 {
+        return Err(OAuthError::InvalidRequest("Missing query params".to_string()));
+    }
+
+    let client_pubkey = parts[0].to_string();
+
+    // Validate pubkey format (64 hex chars)
+    if client_pubkey.len() != 64 || !client_pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(OAuthError::InvalidRequest("Invalid client public key format".to_string()));
+    }
+
+    let query = parts[1];
+
+    // Parse query params manually (serde_urlencoded not available)
+    let mut relay = String::new();
+    let mut secret = String::new();
+    let mut perms = None;
+    let mut name = None;
+    let mut url = None;
+    let mut image = None;
+
+    for param in query.split('&') {
+        if let Some((key, value)) = param.split_once('=') {
+            let decoded_value = urlencoding::decode(value)
+                .map_err(|e| OAuthError::InvalidRequest(format!("Invalid URL encoding: {}", e)))?
+                .into_owned();
+
+            match key {
+                "relay" => relay = decoded_value,
+                "secret" => secret = decoded_value,
+                "perms" => perms = Some(decoded_value),
+                "name" => name = Some(decoded_value),
+                "url" => url = Some(decoded_value),
+                "image" => image = Some(decoded_value),
+                _ => {} // Ignore unknown params
+            }
+        }
+    }
+
+    if relay.is_empty() || secret.is_empty() {
+        return Err(OAuthError::InvalidRequest("Missing required params: relay and secret".to_string()));
+    }
+
+    let params = NostrConnectParams {
+        relay,
+        secret,
+        perms,
+        name,
+        url,
+        image,
+    };
+
+    // Validate relay URL
+    if !params.relay.starts_with("wss://") && !params.relay.starts_with("ws://") {
+        return Err(OAuthError::InvalidRequest("Invalid relay URL".to_string()));
+    }
+
+    Ok((client_pubkey, params))
+}
+
+/// GET /connect/*nostrconnect
+/// Entry point from nostr-login popup - shows authorization page
+pub async fn connect_get(
+    State(_auth_state): State<super::routes::AuthState>,
+    axum::extract::Path(nostrconnect_uri): axum::extract::Path<String>,
+) -> Result<Response, OAuthError> {
+    // Parse the nostrconnect:// URI
+    let (client_pubkey, params) = parse_nostrconnect_uri(&nostrconnect_uri)?;
+
+    tracing::info!(
+        "nostr-login connect request - client: {}..., app: {}, relay: {}",
+        &client_pubkey[..8],
+        params.name.as_deref().unwrap_or("Unknown"),
+        params.relay
+    );
+
+    // TODO: Check if user is logged in via session/JWT
+    // For now, show a simple auth form
+
+    let app_name = params.name.as_deref().unwrap_or("Unknown App");
+    let permissions = params.perms.as_deref().unwrap_or("sign_event");
+
+    let html = format!(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorize Nostr Connection - Keycast</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }}
+        h1 {{
+            color: #bb86fc;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }}
+        .app-info {{
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }}
+        .info-row {{
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+        }}
+        .label {{
+            color: #888;
+            font-size: 14px;
+        }}
+        .value {{
+            color: #e0e0e0;
+            font-weight: 500;
+        }}
+        .buttons {{
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }}
+        button {{
+            flex: 1;
+            padding: 12px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+        }}
+        .approve {{
+            background: #bb86fc;
+            color: #000;
+        }}
+        .approve:hover {{
+            background: #cb96fc;
+        }}
+        .deny {{
+            background: #333;
+            color: #e0e0e0;
+        }}
+        .deny:hover {{
+            background: #444;
+        }}
+        .warning {{
+            background: #2a2a1a;
+            border-left: 4px solid #ffb300;
+            padding: 12px;
+            margin: 20px 0;
+            font-size: 14px;
+            color: #ffb300;
+        }}
+    </style>
+</head>
+<body>
+    <h1>🔑 Authorize Nostr Connection</h1>
+    <p>An application wants to connect to your Keycast account</p>
+
+    <div class="app-info">
+        <div class="info-row">
+            <span class="label">Application:</span>
+            <span class="value">{app_name}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Permissions:</span>
+            <span class="value">{permissions}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Relay:</span>
+            <span class="value">{relay}</span>
+        </div>
+    </div>
+
+    <div class="warning">
+        ⚠️ This will allow the application to sign events on your behalf using your Keycast-managed keys.
+    </div>
+
+    <form method="POST" action="/api/oauth/connect">
+        <input type="hidden" name="client_pubkey" value="{client_pubkey}">
+        <input type="hidden" name="relay" value="{relay}">
+        <input type="hidden" name="secret" value="{secret}">
+        <input type="hidden" name="perms" value="{perms}">
+        <div class="buttons">
+            <button type="submit" name="approved" value="true" class="approve">Approve</button>
+            <button type="submit" name="approved" value="false" class="deny">Deny</button>
+        </div>
+    </form>
+</body>
+</html>
+    "#,
+        app_name = app_name,
+        permissions = permissions,
+        relay = params.relay,
+        client_pubkey = client_pubkey,
+        secret = params.secret,
+        perms = params.perms.as_deref().unwrap_or("")
+    );
+
+    Ok(Html(html).into_response())
+}
+
+/// POST /oauth/connect
+/// User approves/denies the nostr-login connection
+pub async fn connect_post(
+    State(auth_state): State<super::routes::AuthState>,
+    headers: axum::http::HeaderMap,
+    Form(form): Form<ConnectApprovalForm>,
+) -> Result<Response, OAuthError> {
+    tracing::info!(
+        "nostr-login connect approval - client: {}..., approved: {}",
+        &form.client_pubkey[..8],
+        form.approved
+    );
+
+    if !form.approved {
+        return Ok(Html(r#"
+<html>
+<head>
+    <title>Authorization Denied</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            text-align: center;
+            padding: 50px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 { color: #f44336; }
+    </style>
+    <script>
+        setTimeout(() => window.close(), 2000);
+    </script>
+</head>
+<body>
+    <h1>✗ Authorization Denied</h1>
+    <p>You can close this window.</p>
+</body>
+</html>
+        "#).into_response());
+    }
+
+    // Extract user public key from JWT token in Authorization header
+    let user_public_key = super::auth::extract_user_from_token(&headers)
+        .map_err(|_| OAuthError::Unauthorized)?;
+
+    // Get user's encrypted key
+    let encrypted_user_key: Vec<u8> = sqlx::query_scalar(
+        "SELECT encrypted_secret_key FROM personal_keys WHERE user_public_key = ?1"
+    )
+    .bind(&user_public_key)
+    .fetch_one(&auth_state.state.db)
+    .await?;
+
+    // Parse user's public key
+    let bunker_public_key = nostr_sdk::PublicKey::from_hex(&user_public_key)
+        .map_err(|e| OAuthError::InvalidRequest(format!("Invalid public key: {}", e)))?;
+
+    // Create or get application - use client pubkey as identifier
+    let app_name = format!("nostr-login-{}", &form.client_pubkey[..12]);
+
+    let app_id: i64 = match sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM oauth_applications WHERE client_id = ?1"
+    )
+    .bind(&form.client_pubkey)
+    .fetch_optional(&auth_state.state.db)
+    .await? {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO oauth_applications (client_id, client_secret, name, redirect_uris, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, '[]', ?4, ?5) RETURNING id"
+            )
+            .bind(&form.client_pubkey)
+            .bind("") // No client secret for nostr-login
+            .bind(&app_name)
+            .bind(Utc::now())
+            .bind(Utc::now())
+            .fetch_one(&auth_state.state.db)
+            .await?
+        }
+    };
+
+    // Create authorization
+    let relays_json = serde_json::to_string(&vec![form.relay.clone()])
+        .map_err(|e| OAuthError::InvalidRequest(format!("Failed to serialize relays: {}", e)))?;
+
+    sqlx::query(
+        "INSERT INTO oauth_authorizations
+         (user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, client_public_key, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+    )
+    .bind(&user_public_key)
+    .bind(app_id)
+    .bind(bunker_public_key.to_hex())
+    .bind(&encrypted_user_key)
+    .bind(&form.secret)
+    .bind(&relays_json)
+    .bind(&form.client_pubkey)
+    .bind(Utc::now())
+    .bind(Utc::now())
+    .execute(&auth_state.state.db)
+    .await?;
+
+    // Signal signer daemon to reload
+    let signal_file = std::path::Path::new("../database/.reload_signal");
+    let _ = std::fs::File::create(signal_file);
+    tracing::info!("Created reload signal for signer daemon (nostr-login)");
+
+    Ok(Html(r#"
+<html>
+<head>
+    <title>Success</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            text-align: center;
+            padding: 50px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 {
+            color: #4CAF50;
+            font-size: 32px;
+        }
+        p {
+            font-size: 18px;
+            color: #888;
+        }
+        .checkmark {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+    </style>
+    <script>
+        setTimeout(() => window.close(), 3000);
+    </script>
+</head>
+<body>
+    <div class="checkmark">✓</div>
+    <h1>Authorization Successful</h1>
+    <p>You can close this window.</p>
+    <p style="font-size: 14px; margin-top: 20px;">(Closing automatically in 3 seconds...)</p>
+</body>
+</html>
+    "#).into_response())
 }
