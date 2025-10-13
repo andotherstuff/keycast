@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keycast Auth Flow Test</title>
+
+    <!-- Load nostr-tools (simpler for browser) -->
+    <script src="https://unpkg.com/nostr-tools@2.7.2/lib/nostr.bundle.js"></script>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 {
+            color: #bb86fc;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .section {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .section h2 {
+            color: #03dac6;
+            font-size: 18px;
+            margin-top: 0;
+        }
+        .form-group {
+            margin: 15px 0;
+        }
+        label {
+            display: block;
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #bb86fc;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #cb96fc;
+        }
+        button:disabled {
+            background: #444;
+            color: #888;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .status.success {
+            background: #1b5e20;
+            color: #4caf50;
+        }
+        .status.error {
+            background: #5e1b1b;
+            color: #f44336;
+        }
+        .status.info {
+            background: #1a2a3a;
+            color: #03dac6;
+        }
+        pre {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+            color: #03dac6;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔑 Keycast Auth Flow Test</h1>
+    <p class="subtitle">Test the full registration → login → NIP-46 signing flow</p>
+
+    <!-- Step 1: Register/Login -->
+    <div class="section">
+        <h2>Step 1: Sign In</h2>
+        <p>Enter your credentials. If account doesn't exist, it will be created.</p>
+
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" placeholder="your@email.com">
+        </div>
+
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" placeholder="Your password">
+        </div>
+
+        <button onclick="smartAuth()">Sign In / Register</button>
+
+        <div id="auth-status"></div>
+    </div>
+
+    <!-- Step 2: Get Bunker URL and Connect -->
+    <div class="section hidden" id="bunker-section">
+        <h2>Step 2: Your Keycast Identity</h2>
+        <p>Your public key (stored encrypted in KMS):</p>
+        <pre id="pubkey-display"></pre>
+        <pre id="bunker-display"></pre>
+
+        <button onclick="connectToSigner()">Connect to Signer</button>
+        <div id="connect-status"></div>
+    </div>
+
+    <!-- Step 3: Sign Event -->
+    <div class="section hidden" id="signing-section">
+        <h2>Step 3: Sign a Nostr Event</h2>
+        <p>This will use NIP-46 to sign an event via your Keycast bunker.</p>
+
+        <div class="form-group">
+            <label for="event-content">Event Content</label>
+            <input type="text" id="event-content" value="Hello from Keycast! Server-side KMS signing works! 🎉">
+        </div>
+
+        <button onclick="signEvent()">Sign Event</button>
+        <button onclick="signMultiple()">Sign 5 Events</button>
+
+        <div id="signing-status"></div>
+        <pre id="signed-event" class="hidden"></pre>
+    </div>
+
+    <script>
+        let currentToken = null;
+        let currentPubkey = null;
+        let currentBunkerUrl = null;
+        let ndk = null;
+        let remoteSigner = null;
+
+        const API_BASE = 'http://oauth.divine.video/api';
+
+        function showStatus(elementId, message, type = 'info') {
+            const el = document.getElementById(elementId);
+            el.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        async function smartAuth() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            if (!email || !password) {
+                showStatus('auth-status', '✗ Please enter email and password', 'error');
+                return;
+            }
+
+            showStatus('auth-status', 'Authenticating...', 'info');
+
+            // Try to register first
+            try {
+                const registerResponse = await fetch(`${API_BASE}/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const registerData = await registerResponse.json();
+
+                if (registerResponse.ok) {
+                    // Registration succeeded
+                    currentToken = registerData.token;
+                    currentPubkey = registerData.pubkey;
+                    showStatus('auth-status', `✓ Registration successful!`, 'success');
+                    await getBunkerUrl();
+                    return;
+                }
+
+                // Registration failed - try login
+                if (registerData.error && registerData.error.includes('already registered')) {
+                    showStatus('auth-status', 'Account exists, trying login...', 'info');
+
+                    const loginResponse = await fetch(`${API_BASE}/auth/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password })
+                    });
+
+                    const loginData = await loginResponse.json();
+
+                    if (loginResponse.ok) {
+                        currentToken = loginData.token;
+                        currentPubkey = loginData.pubkey;
+                        showStatus('auth-status', `✓ Login successful!`, 'success');
+                        await getBunkerUrl();
+                    } else {
+                        showStatus('auth-status', `✗ Login failed: ${loginData.error}`, 'error');
+                    }
+                } else {
+                    showStatus('auth-status', `✗ Authentication failed: ${registerData.error}`, 'error');
+                }
+            } catch (error) {
+                showStatus('auth-status', `✗ Network error: ${error.message}`, 'error');
+            }
+        }
+
+        async function getBunkerUrl() {
+            if (!currentToken) {
+                showStatus('auth-status', '✗ No auth token', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/user/bunker`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    currentBunkerUrl = data.bunker_url;
+                    showBunkerInfo(currentPubkey, currentBunkerUrl);
+                } else {
+                    showStatus('auth-status', `✗ Failed to get bunker URL: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showStatus('auth-status', `✗ Network error: ${error.message}`, 'error');
+            }
+        }
+
+        function showBunkerInfo(pubkey, bunkerUrl) {
+            document.getElementById('bunker-section').classList.remove('hidden');
+            document.getElementById('pubkey-display').textContent = `Public Key: ${pubkey}`;
+            document.getElementById('bunker-display').textContent = `Bunker URL: ${bunkerUrl}`;
+        }
+
+        async function connectToSigner() {
+            if (!currentBunkerUrl) {
+                showStatus('connect-status', '✗ No bunker URL available', 'error');
+                return;
+            }
+
+            showStatus('connect-status', 'Connecting to signer via NIP-46...', 'info');
+
+            try {
+                // Initialize NDK
+                ndk = new NDK.default({
+                    explicitRelayUrls: ['wss://relay.damus.io']
+                });
+
+                await ndk.connect();
+                showStatus('connect-status', 'Connected to relay, setting up remote signer...', 'info');
+
+                // Create remote signer from bunker URL
+                remoteSigner = new NDK.NDKNip46Signer(ndk, currentBunkerUrl);
+
+                // This will trigger the NIP-46 handshake
+                await remoteSigner.blockUntilReady();
+
+                showStatus('connect-status', '✓ Connected to Keycast signer!', 'success');
+                document.getElementById('signing-section').classList.remove('hidden');
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                showStatus('connect-status', `✗ Connection failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function signEvent() {
+            if (!remoteSigner || !ndk) {
+                showStatus('signing-status', '✗ Please connect to signer first', 'error');
+                return;
+            }
+
+            const content = document.getElementById('event-content').value;
+            showStatus('signing-status', 'Creating and signing event...', 'info');
+
+            try {
+                // Create NDK event
+                const event = new NDK.NDKEvent(ndk);
+                event.kind = 1;
+                event.content = content;
+                event.created_at = Math.floor(Date.now() / 1000);
+
+                // Sign with remote signer
+                await event.sign(remoteSigner);
+
+                showStatus('signing-status', '✓ Event signed successfully!', 'success');
+
+                document.getElementById('signed-event').classList.remove('hidden');
+                document.getElementById('signed-event').textContent = JSON.stringify({
+                    kind: event.kind,
+                    created_at: event.created_at,
+                    tags: event.tags,
+                    content: event.content,
+                    pubkey: event.pubkey,
+                    id: event.id,
+                    sig: event.sig
+                }, null, 2);
+
+            } catch (error) {
+                console.error('Signing error:', error);
+                showStatus('signing-status', `✗ Signing failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function signMultiple() {
+            if (!remoteSigner || !ndk) {
+                showStatus('signing-status', '✗ Please connect to signer first', 'error');
+                return;
+            }
+
+            showStatus('signing-status', 'Signing 5 events rapidly...', 'info');
+
+            try {
+                const results = [];
+
+                for (let i = 1; i <= 5; i++) {
+                    const event = new NDK.NDKEvent(ndk);
+                    event.kind = 1;
+                    event.content = `Test event ${i}/5 - Server-side signing is fast!`;
+                    event.created_at = Math.floor(Date.now() / 1000);
+
+                    await event.sign(remoteSigner);
+
+                    results.push({
+                        number: i,
+                        id: event.id,
+                        sig: event.sig.substring(0, 16) + '...'
+                    });
+
+                    showStatus('signing-status', `Signed ${i}/5 events...`, 'info');
+                }
+
+                showStatus('signing-status', `✓ All 5 events signed successfully!`, 'success');
+
+                document.getElementById('signed-event').classList.remove('hidden');
+                document.getElementById('signed-event').textContent = JSON.stringify(results, null, 2);
+
+            } catch (error) {
+                console.error('Signing error:', error);
+                showStatus('signing-status', `✗ Signing failed: ${error.message}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

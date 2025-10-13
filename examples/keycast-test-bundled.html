@@ -1,0 +1,693 @@
+<!-- ABOUTME: Standalone test page with inlined Keycast provider code -->
+<!-- ABOUTME: Uses nostr-tools from CDN and bundled provider implementation -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Keycast Provider Test</title>
+  <style>
+    body {
+      font-family: monospace;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #fff;
+    }
+
+    .section {
+      margin: 20px 0;
+      padding: 20px;
+      background: #2a2a2a;
+      border-radius: 8px;
+    }
+
+    h2 {
+      color: #7c3aed;
+      margin-top: 0;
+    }
+
+    input {
+      width: 100%;
+      padding: 8px;
+      margin: 5px 0;
+      background: #1a1a1a;
+      border: 1px solid #444;
+      color: #fff;
+      border-radius: 4px;
+    }
+
+    button {
+      background: #7c3aed;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      margin: 5px 5px 5px 0;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #6d28d9;
+    }
+
+    button:disabled {
+      background: #444;
+      cursor: not-allowed;
+    }
+
+    .output {
+      background: #1a1a1a;
+      padding: 10px;
+      margin-top: 10px;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .status {
+      padding: 5px 10px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-top: 10px;
+    }
+
+    .status.disconnected { background: #444; }
+    .status.connecting { background: #f59e0b; }
+    .status.connected { background: #10b981; }
+    .status.error { background: #ef4444; }
+  </style>
+</head>
+<body>
+  <h1>Keycast Provider Test</h1>
+
+  <div class="section">
+    <h2>Configuration</h2>
+    <label>
+      Domain:
+      <input type="text" id="domain" value="oauth.divine.video" placeholder="oauth.divine.video">
+    </label>
+    <label>
+      API Base:
+      <input type="text" id="apiBase" value="/api" placeholder="/api">
+    </label>
+  </div>
+
+  <div class="section">
+    <h2>Authentication</h2>
+    <label>
+      Email:
+      <input type="email" id="email" value="test@example.com" placeholder="user@example.com">
+    </label>
+    <label>
+      Password:
+      <input type="password" id="password" value="testpass123" placeholder="password">
+    </label>
+    <button id="registerBtn">Register</button>
+    <button id="loginBtn">Login</button>
+    <button id="disconnectBtn" disabled>Disconnect</button>
+    <div class="status disconnected" id="status">disconnected</div>
+    <div class="output" id="authOutput"></div>
+  </div>
+
+  <div class="section">
+    <h2>Public Key</h2>
+    <button id="getPubkeyBtn" disabled>Get Public Key</button>
+    <div class="output" id="pubkeyOutput"></div>
+  </div>
+
+  <div class="section">
+    <h2>Sign Event</h2>
+    <label>
+      Event Content:
+      <input type="text" id="eventContent" value="Hello from Keycast!" placeholder="Event content">
+    </label>
+    <button id="signBtn" disabled>Sign Event</button>
+    <div class="output" id="signOutput"></div>
+  </div>
+
+  <div class="section">
+    <h2>Encryption (NIP-44)</h2>
+    <label>
+      Target Pubkey (hex):
+      <input type="text" id="targetPubkey" placeholder="hex pubkey for encryption">
+    </label>
+    <label>
+      Plaintext:
+      <input type="text" id="plaintext" value="Secret message" placeholder="Message to encrypt">
+    </label>
+    <button id="encryptBtn" disabled>Encrypt</button>
+    <button id="decryptBtn" disabled>Decrypt</button>
+    <div class="output" id="encryptOutput"></div>
+  </div>
+
+  <script type="module">
+    import { SimplePool, finalizeEvent, getPublicKey, generateSecretKey } from 'https://esm.sh/nostr-tools@2.10.2';
+    import { encrypt as nip44Encrypt, decrypt as nip44Decrypt, getConversationKey } from 'https://esm.sh/nostr-tools@2.10.2/nip44';
+
+    // Inline NIP-46 Client
+    class Nip46Client {
+      constructor(config) {
+        this.pool = new SimplePool();
+        this.bunkerPubkey = config.bunkerPubkey;
+        this.relay = config.relay;
+        this.secret = config.secret;
+        this.pendingRequests = new Map();
+        this.subscriptionId = null;
+
+        // Generate random ephemeral client keys (NOT derived from secret)
+        // The secret is only used as a parameter in the connect request
+        this.clientKeys = {
+          privateKey: null,  // Will be generated
+          publicKey: '',
+        };
+      }
+
+      async connect() {
+        // Generate random ephemeral keys for this session
+        this.clientKeys.privateKey = generateSecretKey();
+        this.clientKeys.publicKey = getPublicKey(this.clientKeys.privateKey);
+
+        console.log('[NIP46] Generated client keys');
+        console.log('[NIP46] Client pubkey:', this.clientKeys.publicKey);
+        console.log('[NIP46] Bunker pubkey:', this.bunkerPubkey);
+
+        // Calculate conversation key for encryption
+        this.conversationKey = getConversationKey(this.clientKeys.privateKey, this.bunkerPubkey);
+        console.log('[NIP46] Conversation key calculated');
+
+        // Connect to relay
+        console.log('[NIP46] Connecting to relay:', this.relay);
+        await this.pool.ensureRelay(this.relay);
+        console.log('[NIP46] Connected to relay');
+
+        // Subscribe to responses from bunker
+        this.subscriptionId = this.pool.subscribeMany(
+          [this.relay],
+          [
+            {
+              kinds: [24133],
+              '#p': [this.clientKeys.publicKey],
+              authors: [this.bunkerPubkey],
+              since: Math.floor(Date.now() / 1000) - 10,
+            },
+          ],
+          {
+            onevent: async (event) => {
+              console.log('[NIP46] Received event:', event.id);
+              await this.handleResponse(event);
+            },
+            oneose: () => {
+              console.log('[NIP46] Subscription established');
+            },
+          }
+        );
+
+        // Send connect request
+        console.log('[NIP46] Sending connect request...');
+        await this.sendRequest('connect', [this.bunkerPubkey, this.secret]);
+      }
+
+      async disconnect() {
+        if (this.subscriptionId) {
+          this.pool.close([this.relay]);
+          this.subscriptionId = null;
+        }
+      }
+
+      async signEvent(unsignedEvent) {
+        const response = await this.sendRequest('sign_event', [unsignedEvent]);
+        return response;
+      }
+
+      async getPublicKey() {
+        const response = await this.sendRequest('get_public_key', []);
+        return response;
+      }
+
+      async nip04Encrypt(thirdPartyPubkey, plaintext) {
+        const response = await this.sendRequest('nip04_encrypt', [thirdPartyPubkey, plaintext]);
+        return response;
+      }
+
+      async nip04Decrypt(thirdPartyPubkey, ciphertext) {
+        const response = await this.sendRequest('nip04_decrypt', [thirdPartyPubkey, ciphertext]);
+        return response;
+      }
+
+      async nip44Encrypt(thirdPartyPubkey, plaintext) {
+        const response = await this.sendRequest('nip44_encrypt', [thirdPartyPubkey, plaintext]);
+        return response;
+      }
+
+      async nip44Decrypt(thirdPartyPubkey, ciphertext) {
+        const response = await this.sendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
+        return response;
+      }
+
+      async sendRequest(method, params) {
+        const requestId = Math.random().toString(36).substring(7);
+        const request = { id: requestId, method, params };
+
+        console.log('[NIP46] Sending request:', request);
+
+        // Create promise for response
+        const responsePromise = new Promise((resolve, reject) => {
+          this.pendingRequests.set(requestId, { resolve, reject });
+
+          setTimeout(() => {
+            if (this.pendingRequests.has(requestId)) {
+              this.pendingRequests.delete(requestId);
+              reject(new Error('NIP-46 request timeout'));
+            }
+          }, 30000);
+        });
+
+        // Encrypt request with NIP-44 using conversation key
+        const plaintext = JSON.stringify(request);
+        const ciphertext = nip44Encrypt(plaintext, this.conversationKey);
+
+        // Create NIP-46 request event
+        const requestEvent = finalizeEvent(
+          {
+            kind: 24133,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['p', this.bunkerPubkey]],
+            content: ciphertext,
+          },
+          this.clientKeys.privateKey
+        );
+
+        // Publish to relay
+        await this.pool.publish([this.relay], requestEvent);
+        console.log('[NIP46] Request published:', requestEvent.id);
+
+        return responsePromise;
+      }
+
+      async handleResponse(event) {
+        try {
+          console.log('[NIP46] Handling response event');
+          // Decrypt response with NIP-44 using conversation key
+          const plaintext = nip44Decrypt(event.content, this.conversationKey);
+
+          const response = JSON.parse(plaintext);
+          console.log('[NIP46] Decrypted response:', response);
+
+          // Find matching request
+          const pending = this.pendingRequests.get(response.id);
+          if (!pending) {
+            console.warn('[NIP46] Received response for unknown request:', response.id);
+            return;
+          }
+
+          this.pendingRequests.delete(response.id);
+
+          // Resolve or reject based on response
+          if (response.error) {
+            pending.reject(new Error(response.error));
+          } else {
+            pending.resolve(response.result);
+          }
+        } catch (error) {
+          console.error('[NIP46] Failed to handle response:', error);
+        }
+      }
+    }
+
+    // Inline KeycastProvider
+    class KeycastProvider {
+      constructor(config) {
+        this.domain = config.domain;
+        this.apiBase = config.apiBase || '/api';
+        this.name = `Keycast (${config.domain})`;
+        this.type = 'keycast';
+        this.state = 'disconnected';
+
+        this.token = null;
+        this.pubkey = null;
+        this.bunkerUrl = null;
+        this.nip46Client = null;
+      }
+
+      async register(email, password) {
+        this.state = 'connecting';
+
+        try {
+          const response = await fetch(`http://${this.domain}${this.apiBase}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Registration failed');
+          }
+
+          this.token = data.token;
+          this.pubkey = data.pubkey;
+          await this.fetchBunkerUrl();
+          await this.connectToSigner();
+          this.state = 'connected';
+        } catch (error) {
+          this.state = 'error';
+          throw error;
+        }
+      }
+
+      async login(email, password) {
+        this.state = 'connecting';
+
+        try {
+          const response = await fetch(`http://${this.domain}${this.apiBase}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Login failed');
+          }
+
+          this.token = data.token;
+          this.pubkey = data.pubkey;
+          await this.fetchBunkerUrl();
+          await this.connectToSigner();
+          this.state = 'connected';
+        } catch (error) {
+          this.state = 'error';
+          throw error;
+        }
+      }
+
+      async fetchBunkerUrl() {
+        if (!this.token) {
+          throw new Error('No auth token available');
+        }
+
+        const response = await fetch(`http://${this.domain}${this.apiBase}/user/bunker`, {
+          headers: {
+            'Authorization': `Bearer ${this.token}`,
+          },
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to fetch bunker URL');
+        }
+
+        this.bunkerUrl = data.bunker_url;
+        console.log('Got bunker URL:', this.bunkerUrl);
+      }
+
+      async connectToSigner() {
+        if (!this.bunkerUrl) {
+          throw new Error('No bunker URL available');
+        }
+
+        // Parse bunker URL: bunker://PUBKEY?relay=RELAY&secret=SECRET
+        const url = new URL(this.bunkerUrl);
+        const bunkerPubkey = url.hostname;
+        const relay = url.searchParams.get('relay');
+        const secret = url.searchParams.get('secret');
+
+        if (!relay || !secret) {
+          throw new Error('Invalid bunker URL format');
+        }
+
+        console.log('Connecting to signer:', { bunkerPubkey, relay });
+
+        // Create and connect NIP-46 client
+        this.nip46Client = new Nip46Client({
+          bunkerPubkey,
+          relay,
+          secret,
+        });
+
+        await this.nip46Client.connect();
+      }
+
+      async disconnect() {
+        if (this.nip46Client) {
+          await this.nip46Client.disconnect();
+          this.nip46Client = null;
+        }
+
+        this.token = null;
+        this.pubkey = null;
+        this.bunkerUrl = null;
+        this.state = 'disconnected';
+      }
+
+      async getPublicKey() {
+        if (!this.pubkey) {
+          throw new Error('Not authenticated');
+        }
+        return this.pubkey;
+      }
+
+      async signEvent(event) {
+        if (!this.nip46Client) {
+          throw new Error('Not connected to signer');
+        }
+
+        const signedEvent = await this.nip46Client.signEvent(event);
+        return signedEvent;
+      }
+
+      async nip44Encrypt(pubkey, plaintext) {
+        if (!this.nip46Client) {
+          throw new Error('Not connected to signer');
+        }
+        return await this.nip46Client.nip44Encrypt(pubkey, plaintext);
+      }
+
+      async nip44Decrypt(pubkey, ciphertext) {
+        if (!this.nip46Client) {
+          throw new Error('Not connected to signer');
+        }
+        return await this.nip46Client.nip44Decrypt(pubkey, ciphertext);
+      }
+    }
+
+    // Test UI code
+    let provider = null;
+    let lastCiphertext = null;
+
+    const elements = {
+      domain: document.getElementById('domain'),
+      apiBase: document.getElementById('apiBase'),
+      email: document.getElementById('email'),
+      password: document.getElementById('password'),
+      registerBtn: document.getElementById('registerBtn'),
+      loginBtn: document.getElementById('loginBtn'),
+      disconnectBtn: document.getElementById('disconnectBtn'),
+      status: document.getElementById('status'),
+      authOutput: document.getElementById('authOutput'),
+      getPubkeyBtn: document.getElementById('getPubkeyBtn'),
+      pubkeyOutput: document.getElementById('pubkeyOutput'),
+      eventContent: document.getElementById('eventContent'),
+      signBtn: document.getElementById('signBtn'),
+      signOutput: document.getElementById('signOutput'),
+      targetPubkey: document.getElementById('targetPubkey'),
+      plaintext: document.getElementById('plaintext'),
+      encryptBtn: document.getElementById('encryptBtn'),
+      decryptBtn: document.getElementById('decryptBtn'),
+      encryptOutput: document.getElementById('encryptOutput'),
+    };
+
+    function log(elementId, message) {
+      const element = document.getElementById(elementId);
+      const timestamp = new Date().toLocaleTimeString();
+      element.textContent += `[${timestamp}] ${message}\n`;
+      element.scrollTop = element.scrollHeight;
+    }
+
+    function updateStatus(state) {
+      elements.status.textContent = state;
+      elements.status.className = `status ${state}`;
+
+      const isConnected = state === 'connected';
+      elements.disconnectBtn.disabled = !isConnected;
+      elements.getPubkeyBtn.disabled = !isConnected;
+      elements.signBtn.disabled = !isConnected;
+      elements.encryptBtn.disabled = !isConnected;
+      elements.decryptBtn.disabled = !isConnected;
+    }
+
+    elements.registerBtn.addEventListener('click', async () => {
+      try {
+        elements.registerBtn.disabled = true;
+        elements.loginBtn.disabled = true;
+        elements.authOutput.textContent = '';
+
+        log('authOutput', 'Creating KeycastProvider...');
+        provider = new KeycastProvider({
+          domain: elements.domain.value,
+          apiBase: elements.apiBase.value,
+        });
+
+        updateStatus('connecting');
+        log('authOutput', `Registering as ${elements.email.value}...`);
+
+        await provider.register(
+          elements.email.value,
+          elements.password.value
+        );
+
+        updateStatus('connected');
+        log('authOutput', 'Registration successful!');
+        log('authOutput', `Provider: ${provider.name}`);
+        log('authOutput', `Pubkey: ${provider.pubkey}`);
+
+      } catch (error) {
+        updateStatus('error');
+        log('authOutput', `ERROR: ${error.message}`);
+        console.error('Register error:', error);
+        elements.registerBtn.disabled = false;
+        elements.loginBtn.disabled = false;
+      }
+    });
+
+    elements.loginBtn.addEventListener('click', async () => {
+      try {
+        elements.registerBtn.disabled = true;
+        elements.loginBtn.disabled = true;
+        elements.authOutput.textContent = '';
+
+        log('authOutput', 'Creating KeycastProvider...');
+        provider = new KeycastProvider({
+          domain: elements.domain.value,
+          apiBase: elements.apiBase.value,
+        });
+
+        updateStatus('connecting');
+        log('authOutput', `Logging in as ${elements.email.value}...`);
+
+        await provider.login(
+          elements.email.value,
+          elements.password.value
+        );
+
+        updateStatus('connected');
+        log('authOutput', 'Login successful!');
+        log('authOutput', `Provider: ${provider.name}`);
+        log('authOutput', `Pubkey: ${provider.pubkey}`);
+
+      } catch (error) {
+        updateStatus('error');
+        log('authOutput', `ERROR: ${error.message}`);
+        console.error('Login error:', error);
+        elements.registerBtn.disabled = false;
+        elements.loginBtn.disabled = false;
+      }
+    });
+
+    elements.disconnectBtn.addEventListener('click', async () => {
+      try {
+        log('authOutput', 'Disconnecting...');
+        await provider.disconnect();
+        provider = null;
+        updateStatus('disconnected');
+        elements.registerBtn.disabled = false;
+        elements.loginBtn.disabled = false;
+        log('authOutput', 'Disconnected successfully');
+      } catch (error) {
+        log('authOutput', `ERROR: ${error.message}`);
+      }
+    });
+
+    elements.getPubkeyBtn.addEventListener('click', async () => {
+      try {
+        elements.pubkeyOutput.textContent = '';
+        log('pubkeyOutput', 'Fetching public key...');
+
+        const pubkey = await provider.getPublicKey();
+
+        log('pubkeyOutput', `Public Key: ${pubkey}`);
+        elements.targetPubkey.value = pubkey;
+
+      } catch (error) {
+        log('pubkeyOutput', `ERROR: ${error.message}`);
+      }
+    });
+
+    elements.signBtn.addEventListener('click', async () => {
+      try {
+        elements.signOutput.textContent = '';
+        log('signOutput', 'Creating event...');
+
+        const event = {
+          kind: 1,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [],
+          content: elements.eventContent.value,
+        };
+
+        log('signOutput', `Unsigned event: ${JSON.stringify(event, null, 2)}`);
+        log('signOutput', 'Signing via NIP-46...');
+
+        const signedEvent = await provider.signEvent(event);
+
+        log('signOutput', `Signed event: ${JSON.stringify(signedEvent, null, 2)}`);
+
+      } catch (error) {
+        log('signOutput', `ERROR: ${error.message}`);
+        console.error('Sign error:', error);
+      }
+    });
+
+    elements.encryptBtn.addEventListener('click', async () => {
+      try {
+        elements.encryptOutput.textContent = '';
+        log('encryptOutput', 'Encrypting with NIP-44...');
+
+        const ciphertext = await provider.nip44Encrypt(
+          elements.targetPubkey.value,
+          elements.plaintext.value
+        );
+
+        lastCiphertext = ciphertext;
+        log('encryptOutput', `Ciphertext: ${ciphertext}`);
+
+      } catch (error) {
+        log('encryptOutput', `ERROR: ${error.message}`);
+        console.error('Encrypt error:', error);
+      }
+    });
+
+    elements.decryptBtn.addEventListener('click', async () => {
+      try {
+        if (!lastCiphertext) {
+          log('encryptOutput', 'ERROR: No ciphertext to decrypt. Encrypt first.');
+          return;
+        }
+
+        log('encryptOutput', 'Decrypting with NIP-44...');
+
+        const plaintext = await provider.nip44Decrypt(
+          elements.targetPubkey.value,
+          lastCiphertext
+        );
+
+        log('encryptOutput', `Decrypted: ${plaintext}`);
+
+      } catch (error) {
+        log('encryptOutput', `ERROR: ${error.message}`);
+        console.error('Decrypt error:', error);
+      }
+    });
+
+    // Log initial state
+    log('authOutput', 'Ready. Configure domain and authenticate.');
+  </script>
+</body>
+</html>
