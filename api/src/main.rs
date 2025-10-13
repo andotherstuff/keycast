@@ -256,13 +256,13 @@ async fn landing_page() -> Html<&'static str> {
     <div class="test-links">
         <p><strong>Live test clients on <a href="https://oauth.divine.video">oauth.divine.video</a>:</strong></p>
         <ul>
-            <li><a href="https://oauth.divine.video/examples/keycast-test.html" target="_blank">Basic Keycast Test</a> - Test authentication and signing flow</li>
+            <li><a href="https://oauth.divine.video/examples/keycast-test-bundled.html" target="_blank">Basic Keycast Test</a> - Test authentication and signing flow</li>
             <li><a href="https://oauth.divine.video/examples/oauth-test-client.html" target="_blank">OAuth Test Client</a> - Full OAuth 2.0 authorization flow</li>
-            <li><a href="https://oauth.divine.video/examples/nostr-oauth-sign-test.html" target="_blank">OAuth Sign Test</a> - Test event signing with OAuth</li>
-            <li><a href="https://oauth.divine.video/examples/nostr-login-test.html" target="_blank">Login Test</a> - Quick login flow test</li>
+            <li><a href="https://oauth.divine.video/examples/nostr-oauth-sign-production.html" target="_blank">OAuth Sign Test (Production)</a> - Test event signing with OAuth</li>
+            <li><a href="https://oauth.divine.video/examples/nostr-client-oauth-ndk.html" target="_blank">NDK OAuth Client</a> - OAuth client using Nostr Dev Kit</li>
         </ul>
         <p style="margin-top: 15px; font-size: 0.95em; color: #aaa;">
-            Or try them locally at <a href="/examples/keycast-test.html">/examples/</a>
+            Or try them locally at <a href="/examples/">/examples/</a>
         </p>
     </div>
 

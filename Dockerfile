@@ -92,6 +92,9 @@ COPY ./database ./database
 # Copy example HTML files for testing
 COPY ./examples ./examples
 
+# Copy keycast-login library that test files import from
+COPY ./keycast-login ./keycast-login
+
 # Set environment variables
 ENV NODE_ENV=production \
     BUN_ENV=production \
