@@ -22,13 +22,19 @@ wait_for_port() {
 
 if [ "$1" = "api" ]; then
     echo "Starting signer daemon in background..."
-    # Run signer in background, redirecting output to ensure it's captured in logs
-    ./keycast_signer 2>&1 &
+    # Run signer in background with output going to both stdout and a log file
+    # The & after the entire pipeline ensures logs are visible
+    (./keycast_signer 2>&1 | while IFS= read -r line; do echo "[SIGNER] $line"; done) &
     SIGNER_PID=$!
     echo "Signer daemon started with PID $SIGNER_PID"
 
-    # Give signer a moment to start
-    sleep 2
+    # Give signer a moment to start and check if it's still running
+    sleep 3
+    if kill -0 $SIGNER_PID 2>/dev/null; then
+        echo "✓ Signer daemon is running"
+    else
+        echo "✗ WARNING: Signer daemon may have crashed"
+    fi
 
     echo "Starting API server..."
     exec ./keycast_api
