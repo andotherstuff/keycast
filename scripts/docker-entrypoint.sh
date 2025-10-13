@@ -21,6 +21,11 @@ wait_for_port() {
 }
 
 if [ "$1" = "api" ]; then
+    echo "Starting signer daemon in background..."
+    ./keycast_signer &
+    SIGNER_PID=$!
+    echo "Signer daemon started with PID $SIGNER_PID"
+
     echo "Starting API server..."
     exec ./keycast_api
 elif [ "$1" = "web" ]; then
