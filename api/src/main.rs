@@ -1,6 +1,7 @@
 mod api;
 mod state;
 mod technical_docs;
+mod email_service;
 
 use crate::state::{get_db_pool, KeycastState, KEYCAST_STATE};
 use axum::{

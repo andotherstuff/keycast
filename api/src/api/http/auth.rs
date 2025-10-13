@@ -8,7 +8,7 @@ use axum::{
     Json,
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use nostr_sdk::Keys;
 use rand::Rng;
@@ -17,12 +17,23 @@ use sqlx::SqlitePool;
 use std::env;
 
 const TOKEN_EXPIRY_HOURS: i64 = 24;
+const EMAIL_VERIFICATION_EXPIRY_HOURS: i64 = 24;
+const PASSWORD_RESET_EXPIRY_HOURS: i64 = 1;
 
 fn get_jwt_secret() -> String {
     env::var("JWT_SECRET").unwrap_or_else(|_| {
         eprintln!("WARNING: JWT_SECRET not set in environment, using insecure default");
         "insecure-dev-secret-change-in-production".to_string()
     })
+}
+
+fn generate_secure_token() -> String {
+    use rand::distributions::Alphanumeric;
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,17 +73,53 @@ pub struct BunkerUrlResponse {
     pub bunker_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyEmailResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForgotPasswordResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordRequest {
+    pub token: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResetPasswordResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 #[derive(Debug)]
 pub enum AuthError {
     Database(sqlx::Error),
     PasswordHash(bcrypt::BcryptError),
     InvalidCredentials,
     EmailAlreadyExists,
+    EmailNotVerified,
     UserNotFound,
     Encryption(String),
     Internal(String),
     MissingToken,
     InvalidToken,
+    EmailSendFailed(String),
 }
 
 impl IntoResponse for AuthError {
@@ -102,6 +149,10 @@ impl IntoResponse for AuthError {
                 StatusCode::CONFLICT,
                 "This email is already registered. Please log in instead.".to_string(),
             ),
+            AuthError::EmailNotVerified => (
+                StatusCode::FORBIDDEN,
+                "Please verify your email address before continuing. Check your inbox for the verification link.".to_string(),
+            ),
             AuthError::UserNotFound => (
                 StatusCode::NOT_FOUND,
                 "No account found with this email. Please register first.".to_string(),
@@ -130,6 +181,14 @@ impl IntoResponse for AuthError {
                 StatusCode::UNAUTHORIZED,
                 "Invalid or expired token. Please log in again.".to_string(),
             ),
+            AuthError::EmailSendFailed(e) => {
+                // Log the real error but return generic message to user
+                tracing::error!("Email send error: {}", e);
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Unable to send email. Please try again in a few minutes.".to_string(),
+                )
+            },
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -199,6 +258,10 @@ pub async fn register(
     // Hash password
     let password_hash = hash(&req.password, DEFAULT_COST)?;
 
+    // Generate email verification token
+    let verification_token = generate_secure_token();
+    let verification_expires = Utc::now() + Duration::hours(EMAIL_VERIFICATION_EXPIRY_HOURS);
+
     // Generate new Nostr keypair for this user
     let keys = Keys::generate();
     let public_key = keys.public_key();
@@ -220,14 +283,17 @@ pub async fn register(
     // Start transaction
     let mut tx = pool.begin().await?;
 
-    // Insert user
+    // Insert user with email verification token
     sqlx::query(
-        "INSERT INTO users (public_key, email, password_hash, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)"
+        "INSERT INTO users (public_key, email, password_hash, email_verified, email_verification_token, email_verification_expires_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
     )
     .bind(public_key.to_hex())
     .bind(&req.email)
     .bind(&password_hash)
+    .bind(false) // email_verified
+    .bind(&verification_token)
+    .bind(&verification_expires)
     .bind(Utc::now())
     .bind(Utc::now())
     .execute(&mut *tx)
@@ -299,6 +365,17 @@ pub async fn register(
     .await?;
 
     tx.commit().await?;
+
+    // Send verification email
+    let email_service = crate::email_service::EmailService::new()
+        .map_err(|e| AuthError::EmailSendFailed(e))?;
+
+    if let Err(e) = email_service.send_verification_email(&req.email, &verification_token).await {
+        tracing::error!("Failed to send verification email to {}: {}", req.email, e);
+        // Don't fail registration if email send fails - user can request resend later
+    } else {
+        tracing::info!("Sent verification email to {}", req.email);
+    }
 
     // Signal signer daemon to reload authorizations
     let signal_file = std::path::Path::new("database/.reload_signal");
@@ -413,4 +490,171 @@ pub async fn get_bunker_url(
     tracing::info!("Returning bunker URL with pubkey: {}", bunker_pubkey);
 
     Ok(Json(BunkerUrlResponse { bunker_url }))
+}
+
+/// Verify email address with token
+pub async fn verify_email(
+    State(pool): State<SqlitePool>,
+    Json(req): Json<VerifyEmailRequest>,
+) -> Result<Json<VerifyEmailResponse>, AuthError> {
+    tracing::info!("Email verification attempt with token: {}...", &req.token[..10]);
+
+    // Find user with this verification token
+    let user: Option<(String, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT public_key, email_verification_expires_at FROM users
+         WHERE email_verification_token = ?1"
+    )
+    .bind(&req.token)
+    .fetch_optional(&pool)
+    .await?;
+
+    let (public_key, expires_at) = user.ok_or(AuthError::InvalidToken)?;
+
+    // Check if token is expired
+    if let Some(expires) = expires_at {
+        if expires < Utc::now() {
+            return Ok(Json(VerifyEmailResponse {
+                success: false,
+                message: "Verification link has expired. Please request a new one.".to_string(),
+            }));
+        }
+    }
+
+    // Mark email as verified and clear verification token
+    sqlx::query(
+        "UPDATE users
+         SET email_verified = ?1,
+             email_verification_token = NULL,
+             email_verification_expires_at = NULL,
+             updated_at = ?2
+         WHERE public_key = ?3"
+    )
+    .bind(true)
+    .bind(Utc::now())
+    .bind(&public_key)
+    .execute(&pool)
+    .await?;
+
+    tracing::info!("Email verified successfully for user: {}", public_key);
+
+    Ok(Json(VerifyEmailResponse {
+        success: true,
+        message: "Email verified successfully! You can now use all features.".to_string(),
+    }))
+}
+
+/// Request password reset email
+pub async fn forgot_password(
+    State(pool): State<SqlitePool>,
+    Json(req): Json<ForgotPasswordRequest>,
+) -> Result<Json<ForgotPasswordResponse>, AuthError> {
+    tracing::info!("Password reset requested for email: {}", req.email);
+
+    // Check if user exists
+    let user: Option<(String,)> = sqlx::query_as(
+        "SELECT public_key FROM users WHERE email = ?1"
+    )
+    .bind(&req.email)
+    .fetch_optional(&pool)
+    .await?;
+
+    // Always return success even if email doesn't exist (security best practice)
+    if user.is_none() {
+        tracing::info!("Password reset requested for non-existent email: {}", req.email);
+        return Ok(Json(ForgotPasswordResponse {
+            success: true,
+            message: "If an account exists with that email, a password reset link has been sent.".to_string(),
+        }));
+    }
+
+    let (public_key,) = user.unwrap();
+
+    // Generate reset token
+    let reset_token = generate_secure_token();
+    let reset_expires = Utc::now() + Duration::hours(PASSWORD_RESET_EXPIRY_HOURS);
+
+    // Store reset token
+    sqlx::query(
+        "UPDATE users
+         SET password_reset_token = ?1,
+             password_reset_expires_at = ?2,
+             updated_at = ?3
+         WHERE public_key = ?4"
+    )
+    .bind(&reset_token)
+    .bind(&reset_expires)
+    .bind(Utc::now())
+    .bind(&public_key)
+    .execute(&pool)
+    .await?;
+
+    // Send password reset email
+    let email_service = crate::email_service::EmailService::new()
+        .map_err(|e| AuthError::EmailSendFailed(e))?;
+
+    if let Err(e) = email_service.send_password_reset_email(&req.email, &reset_token).await {
+        tracing::error!("Failed to send password reset email to {}: {}", req.email, e);
+        // Don't fail the request if email send fails
+    } else {
+        tracing::info!("Sent password reset email to {}", req.email);
+    }
+
+    Ok(Json(ForgotPasswordResponse {
+        success: true,
+        message: "If an account exists with that email, a password reset link has been sent.".to_string(),
+    }))
+}
+
+/// Reset password with token
+pub async fn reset_password(
+    State(pool): State<SqlitePool>,
+    Json(req): Json<ResetPasswordRequest>,
+) -> Result<Json<ResetPasswordResponse>, AuthError> {
+    tracing::info!("Password reset attempt with token: {}...", &req.token[..10]);
+
+    // Find user with this reset token
+    let user: Option<(String, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT public_key, password_reset_expires_at FROM users
+         WHERE password_reset_token = ?1"
+    )
+    .bind(&req.token)
+    .fetch_optional(&pool)
+    .await?;
+
+    let (public_key, expires_at) = user.ok_or(AuthError::InvalidToken)?;
+
+    // Check if token is expired
+    if let Some(expires) = expires_at {
+        if expires < Utc::now() {
+            return Ok(Json(ResetPasswordResponse {
+                success: false,
+                message: "Password reset link has expired. Please request a new one.".to_string(),
+            }));
+        }
+    }
+
+    // Hash new password
+    let password_hash = hash(&req.new_password, DEFAULT_COST)?;
+
+    // Update password and clear reset token
+    sqlx::query(
+        "UPDATE users
+         SET password_hash = ?1,
+             password_reset_token = NULL,
+             password_reset_expires_at = NULL,
+             updated_at = ?2
+         WHERE public_key = ?3"
+    )
+    .bind(&password_hash)
+    .bind(Utc::now())
+    .bind(&public_key)
+    .execute(&pool)
+    .await?;
+
+    tracing::info!("Password reset successfully for user: {}", public_key);
+
+    Ok(Json(ResetPasswordResponse {
+        success: true,
+        message: "Password reset successfully! You can now log in with your new password.".to_string(),
+    }))
 }

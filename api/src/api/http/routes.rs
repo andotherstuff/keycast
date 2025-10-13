@@ -86,16 +86,29 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .route("/", get(landing_page));
 
     // Public auth routes (no authentication required)
-    let auth_routes = Router::new()
+    // Register and login need AuthState, email verification needs SqlitePool
+    let register_login_routes = Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .with_state(auth_state.clone());
+
+    let email_routes = Router::new()
+        .route("/auth/verify-email", post(auth::verify_email))
+        .route("/auth/forgot-password", post(auth::forgot_password))
+        .route("/auth/reset-password", post(auth::reset_password))
+        .with_state(pool.clone());
 
     // OAuth routes (no authentication required for initial authorize request)
     let oauth_routes = Router::new()
         .route("/oauth/authorize", get(oauth::authorize_get))
         .route("/oauth/authorize", post(oauth::authorize_post))
         .route("/oauth/token", post(oauth::token))
+        .route("/oauth/connect", post(oauth::connect_post))
+        .with_state(auth_state.clone());
+
+    // nostr-login connect routes (wildcard path to capture nostrconnect:// URI)
+    let connect_routes = Router::new()
+        .route("/connect/*nostrconnect", get(oauth::connect_get))
         .with_state(auth_state);
 
     // Protected user routes (authentication required)
@@ -127,10 +140,39 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .with_state(pool);
 
     // Combine routes
+    // Note: discovery route needs to be added at root in main.rs, not here
     Router::new()
         .merge(root_route)
-        .merge(auth_routes)
+        .merge(register_login_routes)
+        .merge(email_routes)
         .merge(oauth_routes)
+        .merge(connect_routes)
         .merge(user_routes)
         .merge(team_routes)
+}
+
+/// NIP-05 discovery endpoint for nostr-login integration
+/// This should be mounted at root level in main.rs, not under /api
+pub async fn nostr_discovery_public() -> impl axum::response::IntoResponse {
+    nostr_discovery().await
+}
+
+/// NIP-05 discovery endpoint for nostr-login integration
+async fn nostr_discovery() -> impl axum::response::IntoResponse {
+    use axum::http::{header, StatusCode};
+    use axum::Json;
+
+    let discovery = serde_json::json!({
+        "nip46": {
+            "relay": "wss://relay.damus.io",
+            "nostrconnect_url": "http://localhost:3000/api/connect/<nostrconnect>"
+        }
+    });
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json"),
+         (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
+        Json(discovery)
+    )
 }
