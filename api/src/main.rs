@@ -4,7 +4,7 @@ mod technical_docs;
 
 use crate::state::{get_db_pool, KeycastState, KEYCAST_STATE};
 use axum::{
-    http::{HeaderValue, StatusCode},
+    http::StatusCode,
     response::{Html, IntoResponse},
     routing::get,
     Router,

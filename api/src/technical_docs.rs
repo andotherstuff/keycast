@@ -4,7 +4,7 @@
 use axum::response::Html;
 
 pub async fn technical_docs() -> Html<&'static str> {
-    Html(r#"
+    Html(r##"
 <!DOCTYPE html>
 <html>
 <head>
@@ -524,5 +524,5 @@ Response:
     </div>
 </body>
 </html>
-    "#)
+    "##)
 }
