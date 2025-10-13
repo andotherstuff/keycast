@@ -136,17 +136,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap()
         .join("examples");
 
+    // Serve public HTML files (landing, login, register, dashboard)
+    let public_path = PathBuf::from(root_dir)
+        .parent()
+        .unwrap()
+        .join("public");
+
     let app = Router::new()
-        .route("/", get(landing_page))
         .route("/docs", get(technical_docs::technical_docs))
         .route("/health", get(health_check))
         .route("/.well-known/nostr.json", get(api::http::nostr_discovery_public))
         .nest("/api", api::http::routes(get_db_pool().unwrap().clone(), KEYCAST_STATE.get().unwrap().clone()))
         .nest_service("/examples", ServeDir::new(examples_path))
+        .nest_service("/", ServeDir::new(public_path))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 
-    println!("✔︎ Static files served from /examples");
+    println!("✔︎ Static files served from /examples and /public");
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("✔︎ API listening on {}", listener.local_addr().unwrap());

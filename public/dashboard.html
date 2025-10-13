@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Keycast</title>
+    <script type="module">
+        import { nip19 } from 'https://esm.sh/nostr-tools@2.10.2';
+        window.nip19 = nip19;
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #2a2a3e;
+            margin-bottom: 30px;
+        }
+        .logo { font-size: 24px; font-weight: bold; color: #bb86fc; }
+        .user-menu {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        .btn-logout {
+            background: transparent;
+            color: #e0e0e0;
+            border: 1px solid #3a3a4e;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-logout:hover {
+            background: rgba(187, 134, 252, 0.1);
+            border-color: #bb86fc;
+        }
+
+        /* Card Styles */
+        .card {
+            background: rgba(42, 42, 62, 0.8);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #2a2a3e;
+            margin-bottom: 25px;
+        }
+        .card h2 {
+            color: #bb86fc;
+            margin-bottom: 20px;
+            font-size: 22px;
+        }
+        .card p {
+            color: #b0b0c0;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        /* Bunker URL */
+        .bunker-url-container {
+            background: #2a2a3e;
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .bunker-url {
+            flex: 1;
+            color: #03dac6;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .btn-copy {
+            background: #bb86fc;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        .btn-copy:hover {
+            background: #cb96fc;
+        }
+
+        /* Identity Section */
+        .identity-grid {
+            display: grid;
+            gap: 15px;
+        }
+        .identity-item {
+            background: #2a2a3e;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .identity-label {
+            color: #808080;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .identity-value {
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+
+        /* Links */
+        .app-links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .app-link {
+            background: #2a2a3e;
+            padding: 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #e0e0e0;
+            transition: all 0.3s;
+            border: 1px solid #3a3a4e;
+        }
+        .app-link:hover {
+            border-color: #bb86fc;
+            transform: translateY(-2px);
+        }
+        .app-link h3 {
+            color: #bb86fc;
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+        .app-link p {
+            color: #b0b0c0;
+            font-size: 14px;
+            margin: 0;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .status.success {
+            background: #1b5e20;
+            color: #a5d6a7;
+            display: block;
+        }
+        .status.error {
+            background: #b71c1c;
+            color: #ef9a9a;
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #b0b0c0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">🔑 Keycast</div>
+            <div class="user-menu">
+                <span id="userEmail"></span>
+                <button class="btn-logout" onclick="logout()">Logout</button>
+            </div>
+        </header>
+
+        <div id="loadingDiv" class="loading">Loading your dashboard...</div>
+
+        <div id="dashboardContent" style="display: none;">
+            <div id="status" class="status"></div>
+
+            <div class="card">
+                <h2>🔑 Your Nostr Identity</h2>
+                <p>This is your unique Nostr public key. Share it with others so they can find you on the network.</p>
+
+                <div class="identity-grid">
+                    <div class="identity-item">
+                        <div class="identity-label">Public Key (hex)</div>
+                        <div class="identity-value" id="pubkeyHex"></div>
+                    </div>
+                    <div class="identity-item">
+                        <div class="identity-label">Public Key (npub)</div>
+                        <div class="identity-value" id="pubkeyNpub"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>🔗 Bunker URL</h2>
+                <p>Use this URL to connect Nostr apps to your Keycast identity. Your private keys stay secure on the server.</p>
+
+                <div class="bunker-url-container">
+                    <div class="bunker-url" id="bunkerUrl">Loading...</div>
+                    <button class="btn-copy" onclick="copyBunkerUrl()">Copy</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📱 Connect Your Apps</h2>
+                <p>Popular Nostr clients that support NIP-46 remote signing:</p>
+
+                <div class="app-links">
+                    <a href="https://damus.io" target="_blank" class="app-link">
+                        <h3>Damus</h3>
+                        <p>iOS Nostr client with beautiful design</p>
+                    </a>
+                    <a href="https://primal.net" target="_blank" class="app-link">
+                        <h3>Primal</h3>
+                        <p>Web and mobile Nostr client with caching</p>
+                    </a>
+                    <a href="https://snort.social" target="_blank" class="app-link">
+                        <h3>Snort</h3>
+                        <p>Fast web-based Nostr client</p>
+                    </a>
+                    <a href="https://nostrudel.ninja" target="_blank" class="app-link">
+                        <h3>noStrudel</h3>
+                        <p>Advanced web client with many features</p>
+                    </a>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>👤 Manage Profile</h2>
+                <p>Edit your Nostr profile, update your name, bio, picture, and more.</p>
+                <a href="/profile" style="color: #bb86fc; text-decoration: none; font-weight: 600;">Go to Profile Settings →</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 5000);
+        }
+
+        async function loadDashboard() {
+            const token = localStorage.getItem('keycast_token');
+            const pubkey = localStorage.getItem('keycast_pubkey');
+
+            if (!token || !pubkey) {
+                window.location.href = '/login';
+                return;
+            }
+
+            try {
+                // Get bunker URL
+                const response = await fetch(`${API_URL}/api/user/bunker`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        localStorage.removeItem('keycast_token');
+                        localStorage.removeItem('keycast_pubkey');
+                        window.location.href = '/login';
+                        return;
+                    }
+                    throw new Error('Failed to load dashboard');
+                }
+
+                const data = await response.json();
+
+                // Display pubkey
+                document.getElementById('pubkeyHex').textContent = pubkey;
+                document.getElementById('pubkeyNpub').textContent = window.nip19.npubEncode(pubkey);
+
+                // Display bunker URL
+                document.getElementById('bunkerUrl').textContent = data.bunker_url;
+
+                // Hide loading, show content
+                document.getElementById('loadingDiv').style.display = 'none';
+                document.getElementById('dashboardContent').style.display = 'block';
+
+            } catch (error) {
+                console.error('Dashboard load error:', error);
+                showStatus('Failed to load dashboard', 'error');
+            }
+        }
+
+        function copyBunkerUrl() {
+            const bunkerUrl = document.getElementById('bunkerUrl').textContent;
+            navigator.clipboard.writeText(bunkerUrl).then(() => {
+                showStatus('Bunker URL copied to clipboard!', 'success');
+            });
+        }
+
+        function logout() {
+            localStorage.removeItem('keycast_token');
+            localStorage.removeItem('keycast_pubkey');
+            window.location.href = '/';
+        }
+
+        // Load on page ready
+        loadDashboard();
+    </script>
+</body>
+</html>
