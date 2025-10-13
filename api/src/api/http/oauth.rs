@@ -250,9 +250,12 @@ pub async fn token(
     .await?;
 
     // Signal signer daemon to reload immediately
-    let signal_file = std::path::Path::new("../database/.reload_signal");
-    let _ = std::fs::File::create(signal_file);
-    tracing::info!("Created reload signal for signer daemon");
+    let signal_file = std::path::Path::new("database/.reload_signal");
+    if let Err(e) = std::fs::File::create(signal_file) {
+        tracing::error!("Failed to create reload signal file: {}", e);
+    } else {
+        tracing::info!("Created reload signal for signer daemon");
+    }
 
     // Build bunker URL
     let bunker_url = format!(
@@ -609,9 +612,12 @@ pub async fn connect_post(
     .await?;
 
     // Signal signer daemon to reload
-    let signal_file = std::path::Path::new("../database/.reload_signal");
-    let _ = std::fs::File::create(signal_file);
-    tracing::info!("Created reload signal for signer daemon (nostr-login)");
+    let signal_file = std::path::Path::new("database/.reload_signal");
+    if let Err(e) = std::fs::File::create(signal_file) {
+        tracing::error!("Failed to create reload signal file: {}", e);
+    } else {
+        tracing::info!("Created reload signal for signer daemon (nostr-login)");
+    }
 
     Ok(Html(r#"
 <html>

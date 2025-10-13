@@ -162,7 +162,7 @@ impl UnifiedSigner {
         let handlers_clone = self.handlers.clone();
         let client_clone = self.client.clone();
         tokio::spawn(async move {
-            let signal_path = std::path::Path::new("../database/.reload_signal");
+            let signal_path = std::path::Path::new("database/.reload_signal");
             loop {
                 // Check for signal file first
                 if signal_path.exists() {
