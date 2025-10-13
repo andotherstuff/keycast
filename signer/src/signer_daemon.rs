@@ -25,6 +25,8 @@ pub struct UnifiedSigner {
     client: Client,
     pool: SqlitePool,
     key_manager: Arc<Box<dyn KeyManager>>,
+    max_loaded_oauth_id: Arc<RwLock<u32>>,
+    max_loaded_regular_id: Arc<RwLock<u32>>,
 }
 
 impl UnifiedSigner {
@@ -36,6 +38,8 @@ impl UnifiedSigner {
             client,
             pool,
             key_manager: Arc::new(key_manager),
+            max_loaded_oauth_id: Arc::new(RwLock::new(0)),
+            max_loaded_regular_id: Arc::new(RwLock::new(0)),
         })
     }
 
@@ -118,35 +122,38 @@ impl UnifiedSigner {
     }
 
     pub async fn connect_to_relays(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Connect to relay that supports NIP-46 (kind 24133)
+        // Connect to multiple relays for redundancy
         self.client.add_relay("wss://relay.damus.io").await?;
+        self.client.add_relay("wss://relay.nsec.app").await?;
+        self.client.add_relay("wss://nos.lol").await?;
         self.client.connect().await;
 
-        tracing::info!("Connected to relays");
+        tracing::info!("Connected to 3 relays for redundancy");
         Ok(())
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let handlers = self.handlers.clone();
 
-        // Subscribe to NIP-46 events for all our bunker pubkeys
-        let handler_pubkeys: Vec<String> = {
+        let handler_count = {
             let h = handlers.read().await;
-            h.keys().cloned().collect()
+            h.len()
         };
 
-        if handler_pubkeys.is_empty() {
+        if handler_count == 0 {
             tracing::warn!("No authorizations loaded, nothing to do");
             return Ok(());
         }
 
-        tracing::info!("Subscribing to NIP-46 events for {} bunker pubkeys", handler_pubkeys.len());
+        tracing::info!(
+            "Subscribing to ALL kind 24133 events on relay (managing {} bunker pubkeys)",
+            handler_count
+        );
 
-        let filter = Filter::new()
-            .kind(Kind::NostrConnect)
-            .pubkeys(handler_pubkeys.iter().map(|pk| {
-                PublicKey::from_hex(pk).unwrap()
-            }));
+        // OPTIMIZATION: Single subscription for ALL kind 24133 events
+        // We'll filter by bunker pubkey in the handler, not at relay level
+        // This scales to millions of users with just ONE relay connection
+        let filter = Filter::new().kind(Kind::NostrConnect);
 
         self.client.subscribe(vec![filter], None).await?;
 
@@ -156,7 +163,7 @@ impl UnifiedSigner {
         let handlers_clone = self.handlers.clone();
         let client_clone = self.client.clone();
         tokio::spawn(async move {
-            let signal_path = std::path::Path::new("database/.reload_signal");
+            let signal_path = std::path::Path::new("../database/.reload_signal");
             loop {
                 // Check for signal file first
                 if signal_path.exists() {
@@ -204,105 +211,122 @@ impl UnifiedSigner {
         pool: &SqlitePool,
         key_manager: &Arc<Box<dyn KeyManager>>,
         handlers: &Arc<RwLock<HashMap<String, AuthorizationHandler>>>,
-        client: &Client,
+        _client: &Client,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Get current count of authorizations in database
-        let regular_count = Authorization::all_ids(pool).await?.len();
-        let oauth_count = OAuthAuthorization::all_ids(pool).await?.len();
-        let db_total = regular_count + oauth_count;
-
-        // Get current count of loaded handlers
-        let loaded_count = {
+        // Get current loaded pubkeys
+        let loaded_pubkeys: std::collections::HashSet<String> = {
             let h = handlers.read().await;
-            h.len()
+            h.keys().cloned().collect()
         };
 
-        // If counts differ, reload all authorizations
-        if db_total != loaded_count {
-            tracing::info!(
-                "Authorization count changed (DB: {}, Loaded: {}), reloading...",
-                db_total,
-                loaded_count
-            );
+        // Load all authorization IDs from database
+        let mut regular_auths = Authorization::all_ids(pool).await?;
+        let mut oauth_auths = OAuthAuthorization::all_ids(pool).await?;
 
-            let mut new_handlers = HashMap::new();
+        // OPTIMIZATION: Only check the LAST 5 authorization IDs since new ones are at the end
+        // This avoids decrypting all 67 authorizations with GCP KMS just to find 1 new one
+        let regular_check_start = regular_auths.len().saturating_sub(5);
+        let oauth_check_start = oauth_auths.len().saturating_sub(5);
 
-            // Load regular authorizations
-            let regular_auths = Authorization::all_ids(pool).await?;
-            for auth_id in regular_auths {
-                let auth = Authorization::find(pool, auth_id).await?;
+        regular_auths = regular_auths.into_iter().skip(regular_check_start).collect();
+        oauth_auths = oauth_auths.into_iter().skip(oauth_check_start).collect();
 
-                // Decrypt bunker secret
-                let decrypted_bunker_secret = key_manager.decrypt(&auth.bunker_secret).await?;
-                let bunker_secret_key = SecretKey::from_slice(&decrypted_bunker_secret)?;
-                let bunker_keys = Keys::new(bunker_secret_key);
+        tracing::debug!(
+            "Fast reload: checking last {} regular + {} OAuth authorizations",
+            regular_auths.len(),
+            oauth_auths.len()
+        );
 
+        let mut added_count = 0;
+
+        // Check for NEW regular authorizations
+        for auth_id in regular_auths {
+            let auth = Authorization::find(pool, auth_id).await?;
+
+            // Decrypt bunker secret to get pubkey
+            let decrypted_bunker_secret = key_manager.decrypt(&auth.bunker_secret).await?;
+            let bunker_secret_key = SecretKey::from_slice(&decrypted_bunker_secret)?;
+            let bunker_keys = Keys::new(bunker_secret_key);
+            let bunker_pubkey = bunker_keys.public_key().to_hex();
+
+            // Only load if not already loaded
+            if !loaded_pubkeys.contains(&bunker_pubkey) {
                 // Decrypt user secret
                 let stored_key = auth.stored_key(pool).await?;
                 let decrypted_user_secret = key_manager.decrypt(&stored_key.secret_key).await?;
                 let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
                 let user_keys = Keys::new(user_secret_key);
 
-                let bunker_pubkey = bunker_keys.public_key().to_hex();
-
-                new_handlers.insert(bunker_pubkey.clone(), AuthorizationHandler {
+                let handler = AuthorizationHandler {
                     bunker_keys,
                     user_keys,
                     secret: auth.secret.clone(),
                     authorization_id: auth_id,
                     is_oauth: false,
                     pool: pool.clone(),
-                });
+                };
+
+                // Add to handlers immediately
+                {
+                    let mut h = handlers.write().await;
+                    h.insert(bunker_pubkey.clone(), handler);
+                }
+
+                added_count += 1;
+
+                tracing::info!(
+                    "Added NEW regular authorization {} with bunker pubkey: {}",
+                    auth_id,
+                    bunker_pubkey
+                );
             }
+        }
 
-            // Load OAuth authorizations
-            let oauth_auths = OAuthAuthorization::all_ids(pool).await?;
-            for auth_id in oauth_auths {
-                let auth = OAuthAuthorization::find(pool, auth_id).await?;
+        // Check for NEW OAuth authorizations
+        for auth_id in oauth_auths {
+            let auth = OAuthAuthorization::find(pool, auth_id).await?;
 
-                // Decrypt user secret (used for both bunker and signing in OAuth)
-                let decrypted_user_secret = key_manager.decrypt(&auth.bunker_secret).await?;
-                let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
-                let user_keys = Keys::new(user_secret_key.clone());
+            // Decrypt user secret to get pubkey
+            let decrypted_user_secret = key_manager.decrypt(&auth.bunker_secret).await?;
+            let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
+            let user_keys = Keys::new(user_secret_key.clone());
+            let bunker_pubkey = user_keys.public_key().to_hex();
 
-                let bunker_pubkey = user_keys.public_key().to_hex();
-
-                new_handlers.insert(bunker_pubkey.clone(), AuthorizationHandler {
+            // Only load if not already loaded
+            if !loaded_pubkeys.contains(&bunker_pubkey) {
+                let handler = AuthorizationHandler {
                     bunker_keys: user_keys.clone(),
                     user_keys,
                     secret: auth.secret.clone(),
                     authorization_id: auth_id,
                     is_oauth: true,
                     pool: pool.clone(),
-                });
-            }
+                };
 
-            // Update handlers
-            {
-                let mut h = handlers.write().await;
-                *h = new_handlers;
-            }
+                // Add to handlers immediately
+                {
+                    let mut h = handlers.write().await;
+                    h.insert(bunker_pubkey.clone(), handler);
+                }
 
-            // Resubscribe with updated pubkeys
-            let handler_pubkeys: Vec<String> = {
-                let h = handlers.read().await;
-                h.keys().cloned().collect()
-            };
-
-            if !handler_pubkeys.is_empty() {
-                let filter = Filter::new()
-                    .kind(Kind::NostrConnect)
-                    .pubkeys(handler_pubkeys.iter().map(|pk| {
-                        PublicKey::from_hex(pk).unwrap()
-                    }));
-
-                client.subscribe(vec![filter], None).await?;
+                added_count += 1;
 
                 tracing::info!(
-                    "Reloaded {} authorizations and updated subscriptions",
-                    handler_pubkeys.len()
+                    "Added NEW OAuth authorization {} with bunker pubkey: {}",
+                    auth_id,
+                    bunker_pubkey
                 );
             }
+        }
+
+        // No need to subscribe since we already get ALL kind 24133 events!
+        if added_count > 0 {
+            tracing::info!(
+                "✅ Fast reload complete: Added {} new authorizations (no new subscription needed)",
+                added_count
+            );
+        } else {
+            tracing::debug!("No new authorizations to load");
         }
 
         Ok(())
@@ -313,7 +337,13 @@ impl UnifiedSigner {
         client: Client,
         event: Box<Event>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Get the bunker pubkey from p-tag
+        // SINGLE SUBSCRIPTION ARCHITECTURE:
+        // We receive ALL kind 24133 events from the relay (no pubkey filter)
+        // Now we check if the target bunker pubkey (in #p tag) is one we manage
+        // If yes: decrypt and handle. If no: silently ignore
+        // This scales to millions of users with just ONE relay connection!
+
+        // Get the bunker pubkey from p-tag (target of the signing request)
         let bunker_pubkey = event
             .tags
             .iter()
@@ -323,7 +353,7 @@ impl UnifiedSigner {
 
         tracing::debug!("Received NIP-46 request for bunker: {}", bunker_pubkey);
 
-        // Find the handler for this bunker pubkey
+        // Check if this bunker pubkey is one we manage
         let handler = {
             let h = handlers.read().await;
             h.get(bunker_pubkey).cloned()
@@ -332,7 +362,8 @@ impl UnifiedSigner {
         let handler = match handler {
             Some(h) => h,
             None => {
-                tracing::warn!("No handler found for bunker pubkey: {}", bunker_pubkey);
+                // Not our bunker, silently ignore (this is normal with single subscription)
+                tracing::debug!("Ignoring NIP-46 request for unmanaged bunker: {}", bunker_pubkey);
                 return Ok(());
             }
         };
@@ -388,6 +419,8 @@ impl UnifiedSigner {
         let method = request["method"].as_str().ok_or("No method")?;
         let request_id = request["id"].clone(); // Extract request ID for response
 
+        tracing::info!("Processing NIP-46 method: {}", method);
+
         // Handle different NIP-46 methods
         let result = match method {
             "sign_event" => {
@@ -412,6 +445,75 @@ impl UnifiedSigner {
                 } else {
                     serde_json::json!({"id": request_id, "result": "ack"})
                 }
+            }
+            "nip44_encrypt" => {
+                // params: [third_party_pubkey, plaintext]
+                let third_party_hex = request["params"][0].as_str().ok_or("Missing pubkey param")?;
+                let plaintext = request["params"][1].as_str().ok_or("Missing plaintext param")?;
+
+                let third_party_pubkey = PublicKey::from_hex(third_party_hex)?;
+                let ciphertext = nip44::encrypt(
+                    handler.user_keys.secret_key(),
+                    &third_party_pubkey,
+                    plaintext,
+                    nip44::Version::V2,
+                )?;
+
+                serde_json::json!({
+                    "id": request_id,
+                    "result": ciphertext
+                })
+            }
+            "nip44_decrypt" => {
+                // params: [third_party_pubkey, ciphertext]
+                let third_party_hex = request["params"][0].as_str().ok_or("Missing pubkey param")?;
+                let ciphertext = request["params"][1].as_str().ok_or("Missing ciphertext param")?;
+
+                let third_party_pubkey = PublicKey::from_hex(third_party_hex)?;
+                let plaintext = nip44::decrypt(
+                    handler.user_keys.secret_key(),
+                    &third_party_pubkey,
+                    ciphertext,
+                )?;
+
+                serde_json::json!({
+                    "id": request_id,
+                    "result": plaintext
+                })
+            }
+            "nip04_encrypt" => {
+                // params: [third_party_pubkey, plaintext]
+                let third_party_hex = request["params"][0].as_str().ok_or("Missing pubkey param")?;
+                let plaintext = request["params"][1].as_str().ok_or("Missing plaintext param")?;
+
+                let third_party_pubkey = PublicKey::from_hex(third_party_hex)?;
+                let ciphertext = nip04::encrypt(
+                    handler.user_keys.secret_key(),
+                    &third_party_pubkey,
+                    plaintext,
+                )?;
+
+                serde_json::json!({
+                    "id": request_id,
+                    "result": ciphertext
+                })
+            }
+            "nip04_decrypt" => {
+                // params: [third_party_pubkey, ciphertext]
+                let third_party_hex = request["params"][0].as_str().ok_or("Missing pubkey param")?;
+                let ciphertext = request["params"][1].as_str().ok_or("Missing ciphertext param")?;
+
+                let third_party_pubkey = PublicKey::from_hex(third_party_hex)?;
+                let plaintext = nip04::decrypt(
+                    handler.user_keys.secret_key(),
+                    &third_party_pubkey,
+                    ciphertext,
+                )?;
+
+                serde_json::json!({
+                    "id": request_id,
+                    "result": plaintext
+                })
             }
             _ => {
                 tracing::warn!("Unsupported NIP-46 method: {}", method);

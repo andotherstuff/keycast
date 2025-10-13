@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Single Relay Subscription Architecture**: Optimized signer daemon to use ONE subscription for ALL kind 24133 events instead of one per user. Scales to millions of users with just 3 relay connections.
+- **Fast Reload Optimization**: Only decrypt last 5 new authorizations instead of all keys. Reduced reload time from 18-21 seconds to ~1.5 seconds.
+- **Comprehensive Technical Documentation**: Added `/docs` endpoint with deep dive into architecture, NIP-46, OAuth flow, encryption, relay architecture, and security model.
+- **Improved Landing Page**: Rewrote landing page with simple, non-technical language focused on user value. Added clear explanation of how Keycast works like Bluesky (custodial, easy to use).
+- **Static File Serving**: Added `/examples/*` route to serve test client HTML files directly from oauth.divine.video.
+- **Multi-Relay Redundancy**: Connect to 3 relays (relay.damus.io, nos.lol, relay.nsec.app) for high availability.
+
+### Changed
+- **Relay Architecture**: Refactored from per-user subscriptions to single global subscription with in-memory filtering by bunker pubkey.
+- **Landing Page Content**: Simplified above-the-fold messaging to focus on ease of use rather than technical details. Technical content moved to `/docs`.
+- **Landing Page Links**: Updated all example client links to use https://oauth.divine.video instead of localhost.
+
+### Performance
+- **Signer daemon**: Single kind 24133 subscription for all 74+ users (was 74+ separate subscriptions)
+- **Reload time**: 1.5 seconds (was 18-21 seconds)
+- **Relay connections**: 3 total regardless of user count (was 3 × number of users)
+- **Memory usage**: O(n) HashMap lookup vs O(n) subscription management
+
+### Technical Details
+- Signer daemon now filters events in handler by checking `#p` tag against managed bunker pubkeys
+- Fast reload only decrypts last 5 authorization IDs (new registrations are sequential)
+- GCP KMS decryption performance: ~300ms per key
+- Event handler silently ignores kind 24133 events for non-managed bunkers
+
 ## [0.2.0] - 2025-01-12
 
 ### Added

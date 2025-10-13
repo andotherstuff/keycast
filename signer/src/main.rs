@@ -7,7 +7,9 @@ use keycast_core::encryption::file_key_manager::FileKeyManager;
 use keycast_core::encryption::gcp_key_manager::GcpKeyManager;
 use keycast_core::encryption::KeyManager;
 use std::env;
+use std::fs;
 use std::path::PathBuf;
+use std::process;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 // Import the unified signer from signer_daemon module
@@ -20,6 +22,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔑 Keycast Unified Signer Starting...");
 
     dotenv().ok();
+
+    // Check for existing pidfile to prevent multiple instances
+    // Use SIGNER_PIDFILE env var if set, otherwise use local database directory
+    let pidfile_path = if let Ok(custom_path) = env::var("SIGNER_PIDFILE") {
+        PathBuf::from(custom_path)
+    } else {
+        let root_dir = env!("CARGO_MANIFEST_DIR");
+        PathBuf::from(root_dir)
+            .parent()
+            .unwrap()
+            .join("database/.signer.pid")
+    };
+
+    if pidfile_path.exists() {
+        let existing_pid_str = fs::read_to_string(&pidfile_path)?;
+        if let Ok(existing_pid) = existing_pid_str.trim().parse::<i32>() {
+            // Check if process is still running
+            if unsafe { libc::kill(existing_pid, 0) } == 0 {
+                eprintln!("❌ ERROR: Another signer daemon is already running (PID: {})", existing_pid);
+                eprintln!("   Pidfile: {}", pidfile_path.display());
+                eprintln!("   Stop the existing daemon before starting a new one.");
+                process::exit(1);
+            } else {
+                // Stale pidfile, remove it
+                tracing::warn!("Found stale pidfile (PID {} not running), removing it", existing_pid);
+                fs::remove_file(&pidfile_path).ok();
+            }
+        }
+    }
+
+    // Write our PID
+    let our_pid = process::id();
+    fs::write(&pidfile_path, our_pid.to_string())?;
+    println!("✔︎ Pidfile created: {} (PID: {})", pidfile_path.display(), our_pid);
+
+    // Register cleanup handler
+    let pidfile_clone = pidfile_path.clone();
+    ctrlc::set_handler(move || {
+        println!("\n🛑 Received shutdown signal, cleaning up...");
+        fs::remove_file(&pidfile_clone).ok();
+        process::exit(0);
+    })?;
 
     // Initialize tracing
     tracing_subscriber::registry()
