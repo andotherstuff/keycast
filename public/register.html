@@ -204,9 +204,10 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    // Store token
+                    // Store token and registration timestamp
                     localStorage.setItem('keycast_token', data.token);
                     localStorage.setItem('keycast_pubkey', data.pubkey);
+                    localStorage.setItem('keycast_registration_time', Date.now().toString());
 
                     showStatus('Account created! Check your email for verification. Redirecting...', 'success');
 

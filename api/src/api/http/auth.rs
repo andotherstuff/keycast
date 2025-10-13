@@ -402,6 +402,12 @@ pub async fn register(
 
     // Signal signer daemon to reload authorizations
     let signal_file = std::path::Path::new("database/.reload_signal");
+    // Ensure directory exists
+    if let Some(parent) = signal_file.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::error!("Failed to create signal file directory: {}", e);
+        }
+    }
     if let Err(e) = std::fs::File::create(signal_file) {
         tracing::error!("Failed to create reload signal file: {}", e);
     } else {
@@ -685,15 +691,16 @@ pub async fn reset_password(
     }))
 }
 
-/// Get user's Nostr profile (kind 0)
+/// Get username for NIP-05 - the only profile data we store server-side
 pub async fn get_profile(
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileData>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
-    tracing::info!("Fetching profile for user: {}", user_pubkey);
+    tracing::info!("Fetching username for user: {}", user_pubkey);
 
-    // Get username from users table
+    // Get username from users table - this is the ONLY thing we store
+    // The client should fetch actual kind 0 profile data from Nostr relays via bunker
     let username: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT username FROM users WHERE public_key = ?1"
     )
@@ -703,36 +710,21 @@ pub async fn get_profile(
 
     let username = username.and_then(|(u,)| u);
 
-    // Check if profile exists in database
-    let result: Option<(String,)> = sqlx::query_as(
-        "SELECT profile_json FROM user_profiles WHERE public_key = ?1"
-    )
-    .bind(&user_pubkey)
-    .fetch_optional(&pool)
-    .await?;
-
-    if let Some((profile_json,)) = result {
-        let mut profile: ProfileData = serde_json::from_str(&profile_json)
-            .map_err(|e| AuthError::Internal(format!("Failed to parse profile: {}", e)))?;
-        profile.username = username;
-        Ok(Json(profile))
-    } else {
-        // Return empty profile if none exists
-        Ok(Json(ProfileData {
-            username,
-            name: None,
-            about: None,
-            picture: None,
-            banner: None,
-            nip05: None,
-            website: None,
-            lud16: None,
-        }))
-    }
+    // Return only username - client fetches rest from relays
+    Ok(Json(ProfileData {
+        username,
+        name: None,
+        about: None,
+        picture: None,
+        banner: None,
+        nip05: None,
+        website: None,
+        lud16: None,
+    }))
 }
 
-/// Update user's Nostr profile (kind 0)
-/// Stores the profile in database. Client should publish to relays via their bunker connection.
+/// Update username (for NIP-05) - the only profile data we store server-side
+/// Client should publish kind 0 profile events to relays via bunker URL
 pub async fn update_profile(
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
@@ -740,9 +732,9 @@ pub async fn update_profile(
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
 
-    tracing::info!("Updating profile for user: {}", user_pubkey);
+    tracing::info!("Updating username for user: {}", user_pubkey);
 
-    // If username is provided, update it in users table
+    // Only update username - everything else is stored on Nostr relays
     if let Some(ref username) = profile.username {
         // Validate username (alphanumeric, dash, underscore only)
         if !username.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
@@ -775,28 +767,10 @@ pub async fn update_profile(
         tracing::info!("Username updated to '{}' for user: {}", username, user_pubkey);
     }
 
-    // Serialize profile to JSON
-    let profile_json = serde_json::to_string(&profile)
-        .map_err(|e| AuthError::Internal(format!("Failed to serialize profile: {}", e)))?;
-
-    // Store profile in database
-    sqlx::query(
-        "INSERT OR REPLACE INTO user_profiles (public_key, profile_json, updated_at)
-         VALUES (?1, ?2, ?3)"
-    )
-    .bind(&user_pubkey)
-    .bind(&profile_json)
-    .bind(Utc::now())
-    .execute(&pool)
-    .await?;
-
-    tracing::info!("Profile saved to database for user: {}", user_pubkey);
-
-    // Return profile data so client can publish to relays via bunker
+    // Client should publish profile to relays via bunker URL
     Ok(Json(serde_json::json!({
         "success": true,
-        "message": "Profile saved. Please publish to relays.",
-        "profile": profile
+        "message": "Username saved. Client should publish kind 0 event to relays via bunker."
     })))
 }
 

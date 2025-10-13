@@ -12,3 +12,6 @@ master.key
 # Service account credentials
 *service-account*.json
 credentials.json
+
+# Git worktrees
+.worktrees/
