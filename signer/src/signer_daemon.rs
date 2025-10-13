@@ -616,6 +616,12 @@ impl AuthorizationHandler {
 
         tracing::debug!("Successfully signed event: {}", signed_event.id);
 
+        // Log signing activity to database
+        if let Err(e) = self.log_signing_activity(kind, content, &signed_event.id.to_hex()).await {
+            tracing::error!("Failed to log signing activity: {}", e);
+            // Don't fail the signing request if activity logging fails
+        }
+
         // Extract request ID to include in response
         let request_id = request["id"].clone();
 
@@ -623,6 +629,75 @@ impl AuthorizationHandler {
             "id": request_id,
             "result": serde_json::to_string(&signed_event)?
         }))
+    }
+
+    async fn log_signing_activity(
+        &self,
+        event_kind: u16,
+        event_content: &str,
+        event_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Get user public key and application ID
+        let (user_pubkey, application_id, client_pubkey, bunker_secret) = if self.is_oauth {
+            // For OAuth, look up the oauth_authorization
+            let oauth_auth: (String, Option<i64>, Option<String>, String) = sqlx::query_as(
+                "SELECT user_public_key, application_id, client_public_key, secret
+                 FROM oauth_authorizations
+                 WHERE id = ?1"
+            )
+            .bind(self.authorization_id as i64)
+            .fetch_one(&self.pool)
+            .await?;
+            oauth_auth
+        } else {
+            // For regular authorizations, look up via authorizations table
+            let auth: (i64, String) = sqlx::query_as(
+                "SELECT stored_key_id, secret FROM authorizations WHERE id = ?1"
+            )
+            .bind(self.authorization_id as i64)
+            .fetch_one(&self.pool)
+            .await?;
+
+            let stored_key_id = auth.0;
+            let bunker_secret = auth.1;
+
+            // Get public_key from stored_keys
+            let stored_key: (String,) = sqlx::query_as(
+                "SELECT public_key FROM stored_keys WHERE id = ?1"
+            )
+            .bind(stored_key_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+            (stored_key.0, None, None, bunker_secret)
+        };
+
+        // Truncate content for storage (don't store huge amounts of text)
+        let truncated_content = if event_content.len() > 500 {
+            format!("{}... (truncated)", &event_content[..500])
+        } else {
+            event_content.to_string()
+        };
+
+        // Insert signing activity
+        sqlx::query(
+            "INSERT INTO signing_activity
+             (user_public_key, application_id, bunker_secret, event_kind, event_content, event_id, client_public_key, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)"
+        )
+        .bind(&user_pubkey)
+        .bind(application_id)
+        .bind(&bunker_secret)
+        .bind(event_kind as i64)
+        .bind(&truncated_content)
+        .bind(event_id)
+        .bind(&client_pubkey)
+        .execute(&self.pool)
+        .await?;
+
+        tracing::debug!("Logged signing activity for user {} kind {}", user_pubkey, event_kind);
+
+        Ok(())
     }
 }
 

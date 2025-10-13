@@ -114,6 +114,15 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
     // Protected user routes (authentication required)
     let user_routes = Router::new()
         .route("/user/bunker", get(auth::get_bunker_url))
+        .route("/user/profile", get(auth::get_profile))
+        .route("/user/sessions", get(auth::list_sessions))
+        .route("/user/sessions/:secret/activity", get(auth::get_session_activity))
+        .with_state(pool.clone());
+
+    let profile_update_routes = Router::new()
+        .route("/user/profile", post(auth::update_profile))
+        .route("/user/sessions/revoke", post(auth::revoke_session))
+        .layer(middleware::from_fn(auth_middleware))
         .with_state(pool.clone());
 
     // Protected team routes (authentication required)
@@ -148,20 +157,50 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .merge(oauth_routes)
         .merge(connect_routes)
         .merge(user_routes)
+        .merge(profile_update_routes)
         .merge(team_routes)
 }
 
 /// NIP-05 discovery endpoint for nostr-login integration
 /// This should be mounted at root level in main.rs, not under /api
-pub async fn nostr_discovery_public() -> impl axum::response::IntoResponse {
-    nostr_discovery().await
-}
-
-/// NIP-05 discovery endpoint for nostr-login integration
-async fn nostr_discovery() -> impl axum::response::IntoResponse {
+pub async fn nostr_discovery_public(
+    axum::extract::State(pool): axum::extract::State<SqlitePool>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
     use axum::http::{header, StatusCode};
-    use axum::Json;
+    use axum::body::Body;
+    use axum::response::Response;
 
+    // Check if "name" query parameter is provided
+    if let Some(name) = params.get("name") {
+        // Look up user by username
+        let result: Option<(String,)> = sqlx::query_as(
+            "SELECT public_key FROM users WHERE username = ?1"
+        )
+        .bind(name)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((pubkey,)) = result {
+            // Return NIP-05 response with user's pubkey
+            let response = serde_json::json!({
+                "names": {
+                    name: pubkey
+                }
+            });
+
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_string(&response).unwrap()))
+                .unwrap();
+        }
+    }
+
+    // Return default nostr-login discovery info if no name or name not found
     let discovery = serde_json::json!({
         "nip46": {
             "relay": "wss://relay.damus.io",
@@ -169,10 +208,10 @@ async fn nostr_discovery() -> impl axum::response::IntoResponse {
         }
     });
 
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json"),
-         (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
-        Json(discovery)
-    )
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(Body::from(serde_json::to_string(&discovery).unwrap()))
+        .unwrap()
 }

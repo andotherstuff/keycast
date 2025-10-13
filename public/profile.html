@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile - Keycast</title>
+    <script type="module">
+        import { nip19 } from 'https://esm.sh/nostr-tools@2.10.2';
+        window.nip19 = nip19;
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #2a2a3e;
+            margin-bottom: 30px;
+        }
+        .logo { font-size: 24px; font-weight: bold; color: #bb86fc; }
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: #b0b0c0;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        .nav-links a:hover {
+            color: #bb86fc;
+        }
+        .btn-logout {
+            background: transparent;
+            color: #e0e0e0;
+            border: 1px solid #3a3a4e;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-logout:hover {
+            background: rgba(187, 134, 252, 0.1);
+            border-color: #bb86fc;
+        }
+
+        /* Card */
+        .card {
+            background: rgba(42, 42, 62, 0.8);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #2a2a3e;
+            margin-bottom: 25px;
+        }
+        .card h2 {
+            color: #bb86fc;
+            margin-bottom: 20px;
+            font-size: 22px;
+        }
+        .card p {
+            color: #b0b0c0;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        /* Form */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #b0b0c0;
+            font-weight: 500;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 12px 16px;
+            background: #2a2a3e;
+            border: 1px solid #3a3a4e;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 16px;
+            transition: border 0.3s;
+            font-family: inherit;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #bb86fc;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        .help-text {
+            font-size: 13px;
+            color: #808080;
+            margin-top: 5px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            background: #bb86fc;
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            background: #cb96fc;
+            transform: translateY(-2px);
+        }
+        .btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .status.success {
+            background: #1b5e20;
+            color: #a5d6a7;
+            display: block;
+        }
+        .status.error {
+            background: #b71c1c;
+            color: #ef9a9a;
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #b0b0c0;
+        }
+
+        .profile-preview {
+            background: #2a2a3e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .profile-preview h3 {
+            color: #03dac6;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .profile-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #3a3a4e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            margin-bottom: 15px;
+        }
+        .profile-name {
+            font-size: 20px;
+            font-weight: 600;
+            color: #e0e0e0;
+            margin-bottom: 5px;
+        }
+        .profile-nip05 {
+            font-size: 14px;
+            color: #03dac6;
+            margin-bottom: 10px;
+        }
+        .profile-about {
+            color: #b0b0c0;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">🔑 Keycast</div>
+            <div class="nav-links">
+                <a href="/dashboard">Dashboard</a>
+                <a href="/profile">Profile</a>
+                <button class="btn-logout" onclick="logout()">Logout</button>
+            </div>
+        </header>
+
+        <div id="loadingDiv" class="loading">Loading your profile...</div>
+
+        <div id="profileContent" style="display: none;">
+            <div id="status" class="status"></div>
+
+            <div class="card">
+                <h2>👤 Your Nostr Profile</h2>
+                <p>This is your kind 0 metadata. Changes will be published to the Nostr network.</p>
+
+                <form id="profileForm">
+                    <div class="form-group">
+                        <label for="username">Username (for NIP-05)</label>
+                        <input type="text" id="username" placeholder="yourname" pattern="[a-zA-Z0-9_\-]+">
+                        <div class="help-text">Choose your username for name@keycast.app identifier</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="name">Display Name</label>
+                        <input type="text" id="name" placeholder="Your name">
+                        <div class="help-text">How others see you on Nostr</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="about">About / Bio</label>
+                        <textarea id="about" placeholder="Tell people about yourself..."></textarea>
+                        <div class="help-text">A short description about you</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="picture">Profile Picture URL</label>
+                        <input type="url" id="picture" placeholder="https://example.com/avatar.jpg">
+                        <div class="help-text">Direct link to your profile picture</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="banner">Banner Image URL</label>
+                        <input type="url" id="banner" placeholder="https://example.com/banner.jpg">
+                        <div class="help-text">Header image for your profile</div>
+                    </div>
+
+                    <div class="form-group" style="display: none;">
+                        <label for="nip05">NIP-05 Identifier</label>
+                        <input type="text" id="nip05" placeholder="username@domain.com" readonly>
+                        <div class="help-text">Auto-generated from your username</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="website">Website</label>
+                        <input type="url" id="website" placeholder="https://yoursite.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="lud16">Lightning Address (LUD-16)</label>
+                        <input type="text" id="lud16" placeholder="you@getalby.com">
+                        <div class="help-text">For receiving Lightning tips</div>
+                    </div>
+
+                    <button type="submit" class="btn" id="saveBtn">Save Profile</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>📋 Preview</h2>
+                <p>How your profile will appear on Nostr:</p>
+
+                <div class="profile-preview">
+                    <div class="profile-avatar" id="previewAvatar">👤</div>
+                    <div class="profile-name" id="previewName">Anonymous</div>
+                    <div class="profile-nip05" id="previewNip05"></div>
+                    <div class="profile-about" id="previewAbout">No bio yet.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 5000);
+        }
+
+        function updatePreview() {
+            const username = document.getElementById('username').value;
+            const name = document.getElementById('name').value || 'Anonymous';
+            const about = document.getElementById('about').value || 'No bio yet.';
+            const picture = document.getElementById('picture').value;
+
+            // Auto-generate NIP-05 from username
+            let nip05 = '';
+            if (username) {
+                nip05 = `${username}@${window.location.hostname}`;
+                document.getElementById('nip05').value = nip05;
+            }
+
+            document.getElementById('previewName').textContent = name;
+            document.getElementById('previewAbout').textContent = about;
+            document.getElementById('previewNip05').textContent = nip05 ? `✓ ${nip05}` : '';
+
+            if (picture) {
+                document.getElementById('previewAvatar').innerHTML = `<img src="${picture}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
+            } else {
+                document.getElementById('previewAvatar').textContent = name.charAt(0).toUpperCase() || '👤';
+            }
+        }
+
+        async function loadProfile() {
+            const token = localStorage.getItem('keycast_token');
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/api/user/profile`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        localStorage.removeItem('keycast_token');
+                        localStorage.removeItem('keycast_pubkey');
+                        window.location.href = '/login';
+                        return;
+                    }
+                    throw new Error('Failed to load profile');
+                }
+
+                const profile = await response.json();
+
+                // Populate form
+                document.getElementById('username').value = profile.username || '';
+                document.getElementById('name').value = profile.name || '';
+                document.getElementById('about').value = profile.about || '';
+                document.getElementById('picture').value = profile.picture || '';
+                document.getElementById('banner').value = profile.banner || '';
+                document.getElementById('nip05').value = profile.nip05 || '';
+                document.getElementById('website').value = profile.website || '';
+                document.getElementById('lud16').value = profile.lud16 || '';
+
+                updatePreview();
+
+                document.getElementById('loadingDiv').style.display = 'none';
+                document.getElementById('profileContent').style.display = 'block';
+
+            } catch (error) {
+                console.error('Profile load error:', error);
+                showStatus('Failed to load profile', 'error');
+            }
+        }
+
+        document.getElementById('profileForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const token = localStorage.getItem('keycast_token');
+            const btn = document.getElementById('saveBtn');
+
+            const profile = {
+                username: document.getElementById('username').value,
+                name: document.getElementById('name').value,
+                about: document.getElementById('about').value,
+                picture: document.getElementById('picture').value,
+                banner: document.getElementById('banner').value,
+                nip05: document.getElementById('nip05').value,
+                website: document.getElementById('website').value,
+                lud16: document.getElementById('lud16').value,
+            };
+
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const response = await fetch(`${API_URL}/api/user/profile`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(profile)
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Failed to save profile');
+                }
+
+                showStatus('Profile saved and published to Nostr!', 'success');
+
+            } catch (error) {
+                showStatus(error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Save Profile';
+            }
+        });
+
+        // Update preview on input
+        ['name', 'about', 'picture', 'nip05'].forEach(id => {
+            document.getElementById(id).addEventListener('input', updatePreview);
+        });
+
+        function logout() {
+            localStorage.removeItem('keycast_token');
+            localStorage.removeItem('keycast_pubkey');
+            window.location.href = '/';
+        }
+
+        loadProfile();
+    </script>
+</body>
+</html>

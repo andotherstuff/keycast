@@ -107,6 +107,26 @@ pub struct ResetPasswordResponse {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProfileData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nip05: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lud16: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum AuthError {
     Database(sqlx::Error),
@@ -366,15 +386,18 @@ pub async fn register(
 
     tx.commit().await?;
 
-    // Send verification email
-    let email_service = crate::email_service::EmailService::new()
-        .map_err(|e| AuthError::EmailSendFailed(e))?;
-
-    if let Err(e) = email_service.send_verification_email(&req.email, &verification_token).await {
-        tracing::error!("Failed to send verification email to {}: {}", req.email, e);
-        // Don't fail registration if email send fails - user can request resend later
-    } else {
-        tracing::info!("Sent verification email to {}", req.email);
+    // Send verification email (optional - don't fail if email service unavailable)
+    match crate::email_service::EmailService::new() {
+        Ok(email_service) => {
+            if let Err(e) = email_service.send_verification_email(&req.email, &verification_token).await {
+                tracing::error!("Failed to send verification email to {}: {}", req.email, e);
+            } else {
+                tracing::info!("Sent verification email to {}", req.email);
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Email service unavailable, skipping verification email: {}", e);
+        }
     }
 
     // Signal signer daemon to reload authorizations
@@ -588,15 +611,18 @@ pub async fn forgot_password(
     .execute(&pool)
     .await?;
 
-    // Send password reset email
-    let email_service = crate::email_service::EmailService::new()
-        .map_err(|e| AuthError::EmailSendFailed(e))?;
-
-    if let Err(e) = email_service.send_password_reset_email(&req.email, &reset_token).await {
-        tracing::error!("Failed to send password reset email to {}: {}", req.email, e);
-        // Don't fail the request if email send fails
-    } else {
-        tracing::info!("Sent password reset email to {}", req.email);
+    // Send password reset email (optional - don't fail if email service unavailable)
+    match crate::email_service::EmailService::new() {
+        Ok(email_service) => {
+            if let Err(e) = email_service.send_password_reset_email(&req.email, &reset_token).await {
+                tracing::error!("Failed to send password reset email to {}: {}", req.email, e);
+            } else {
+                tracing::info!("Sent password reset email to {}", req.email);
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Email service unavailable, skipping password reset email: {}", e);
+        }
     }
 
     Ok(Json(ForgotPasswordResponse {
@@ -658,3 +684,286 @@ pub async fn reset_password(
         message: "Password reset successfully! You can now log in with your new password.".to_string(),
     }))
 }
+
+/// Get user's Nostr profile (kind 0)
+pub async fn get_profile(
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+) -> Result<Json<ProfileData>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    tracing::info!("Fetching profile for user: {}", user_pubkey);
+
+    // Get username from users table
+    let username: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT username FROM users WHERE public_key = ?1"
+    )
+    .bind(&user_pubkey)
+    .fetch_optional(&pool)
+    .await?;
+
+    let username = username.and_then(|(u,)| u);
+
+    // Check if profile exists in database
+    let result: Option<(String,)> = sqlx::query_as(
+        "SELECT profile_json FROM user_profiles WHERE public_key = ?1"
+    )
+    .bind(&user_pubkey)
+    .fetch_optional(&pool)
+    .await?;
+
+    if let Some((profile_json,)) = result {
+        let mut profile: ProfileData = serde_json::from_str(&profile_json)
+            .map_err(|e| AuthError::Internal(format!("Failed to parse profile: {}", e)))?;
+        profile.username = username;
+        Ok(Json(profile))
+    } else {
+        // Return empty profile if none exists
+        Ok(Json(ProfileData {
+            username,
+            name: None,
+            about: None,
+            picture: None,
+            banner: None,
+            nip05: None,
+            website: None,
+            lud16: None,
+        }))
+    }
+}
+
+/// Update user's Nostr profile (kind 0)
+/// Stores the profile in database. Client should publish to relays via their bunker connection.
+pub async fn update_profile(
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+    Json(profile): Json<ProfileData>,
+) -> Result<Json<serde_json::Value>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+
+    tracing::info!("Updating profile for user: {}", user_pubkey);
+
+    // If username is provided, update it in users table
+    if let Some(ref username) = profile.username {
+        // Validate username (alphanumeric, dash, underscore only)
+        if !username.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            return Err(AuthError::Internal("Username can only contain letters, numbers, dashes, and underscores".to_string()));
+        }
+
+        // Check if username is already taken
+        let existing: Option<(String,)> = sqlx::query_as(
+            "SELECT public_key FROM users WHERE username = ?1 AND public_key != ?2"
+        )
+        .bind(username)
+        .bind(&user_pubkey)
+        .fetch_optional(&pool)
+        .await?;
+
+        if existing.is_some() {
+            return Err(AuthError::Internal("Username already taken".to_string()));
+        }
+
+        // Update username in users table
+        sqlx::query(
+            "UPDATE users SET username = ?1, updated_at = ?2 WHERE public_key = ?3"
+        )
+        .bind(username)
+        .bind(Utc::now())
+        .bind(&user_pubkey)
+        .execute(&pool)
+        .await?;
+
+        tracing::info!("Username updated to '{}' for user: {}", username, user_pubkey);
+    }
+
+    // Serialize profile to JSON
+    let profile_json = serde_json::to_string(&profile)
+        .map_err(|e| AuthError::Internal(format!("Failed to serialize profile: {}", e)))?;
+
+    // Store profile in database
+    sqlx::query(
+        "INSERT OR REPLACE INTO user_profiles (public_key, profile_json, updated_at)
+         VALUES (?1, ?2, ?3)"
+    )
+    .bind(&user_pubkey)
+    .bind(&profile_json)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
+
+    tracing::info!("Profile saved to database for user: {}", user_pubkey);
+
+    // Return profile data so client can publish to relays via bunker
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Profile saved. Please publish to relays.",
+        "profile": profile
+    })))
+}
+
+#[derive(Debug, Serialize)]
+pub struct BunkerSession {
+    pub application_name: String,
+    pub application_id: Option<i64>,
+    pub bunker_pubkey: String,
+    pub secret: String,
+    pub client_pubkey: Option<String>,
+    pub created_at: String,
+    pub last_activity: Option<String>,
+    pub activity_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BunkerSessionsResponse {
+    pub sessions: Vec<BunkerSession>,
+}
+
+/// List all active bunker sessions for the authenticated user
+pub async fn list_sessions(
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+) -> Result<Json<BunkerSessionsResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    tracing::info!("Listing bunker sessions for user: {}", user_pubkey);
+
+    // Get OAuth authorizations with application details and activity stats
+    let oauth_sessions: Vec<(String, i64, String, String, Option<String>, String, Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT
+            COALESCE(a.name, 'Personal Bunker') as name,
+            oa.application_id,
+            oa.bunker_public_key,
+            oa.secret,
+            oa.client_public_key,
+            oa.created_at,
+            (SELECT MAX(created_at) FROM signing_activity WHERE bunker_secret = oa.secret) as last_activity,
+            (SELECT COUNT(*) FROM signing_activity WHERE bunker_secret = oa.secret) as activity_count
+         FROM oauth_authorizations oa
+         LEFT JOIN oauth_applications a ON oa.application_id = a.id
+         WHERE oa.user_public_key = ?1
+           AND oa.revoked_at IS NULL
+         ORDER BY oa.created_at DESC"
+    )
+    .bind(&user_pubkey)
+    .fetch_all(&pool)
+    .await?;
+
+    let sessions = oauth_sessions
+        .into_iter()
+        .map(|(name, app_id, bunker_pubkey, secret, client_pubkey, created_at, last_activity, activity_count)| BunkerSession {
+            application_name: name,
+            application_id: Some(app_id),
+            bunker_pubkey,
+            secret,
+            client_pubkey,
+            created_at,
+            last_activity,
+            activity_count: activity_count.unwrap_or(0),
+        })
+        .collect();
+
+    Ok(Json(BunkerSessionsResponse { sessions }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionActivity {
+    pub event_kind: i64,
+    pub event_content: Option<String>,
+    pub event_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionActivityResponse {
+    pub activities: Vec<SessionActivity>,
+}
+
+/// Get activity log for a specific bunker session
+pub async fn get_session_activity(
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+    axum::extract::Path(secret): axum::extract::Path<String>,
+) -> Result<Json<SessionActivityResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    tracing::info!("Fetching activity for bunker secret: {}", secret);
+
+    // Verify this bunker session belongs to the user
+    let session: Option<(String,)> = sqlx::query_as(
+        "SELECT user_public_key FROM oauth_authorizations WHERE secret = ?1"
+    )
+    .bind(&secret)
+    .fetch_optional(&pool)
+    .await?;
+
+    if session.is_none() || session.unwrap().0 != user_pubkey {
+        return Err(AuthError::InvalidToken);
+    }
+
+    // Get activity log
+    let activities: Vec<(i64, Option<String>, Option<String>, String)> = sqlx::query_as(
+        "SELECT event_kind, event_content, event_id, created_at
+         FROM signing_activity
+         WHERE bunker_secret = ?1
+         ORDER BY created_at DESC
+         LIMIT 100"
+    )
+    .bind(&secret)
+    .fetch_all(&pool)
+    .await?;
+
+    let activities = activities
+        .into_iter()
+        .map(|(kind, content, event_id, created_at)| SessionActivity {
+            event_kind: kind,
+            event_content: content,
+            event_id,
+            created_at,
+        })
+        .collect();
+
+    Ok(Json(SessionActivityResponse { activities }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeSessionRequest {
+    pub secret: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevokeSessionResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Revoke a bunker session
+pub async fn revoke_session(
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+    Json(req): Json<RevokeSessionRequest>,
+) -> Result<Json<RevokeSessionResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    tracing::info!("Revoking bunker session for user: {}", user_pubkey);
+
+    // Verify this bunker session belongs to the user and revoke it
+    let result = sqlx::query(
+        "UPDATE oauth_authorizations
+         SET revoked_at = ?1, updated_at = ?2
+         WHERE secret = ?3 AND user_public_key = ?4 AND revoked_at IS NULL"
+    )
+    .bind(Utc::now())
+    .bind(Utc::now())
+    .bind(&req.secret)
+    .bind(&user_pubkey)
+    .execute(&pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AuthError::InvalidToken);
+    }
+
+    tracing::info!("Successfully revoked bunker session for user: {}", user_pubkey);
+
+    Ok(Json(RevokeSessionResponse {
+        success: true,
+        message: "Session revoked successfully".to_string(),
+    }))
+}
+
