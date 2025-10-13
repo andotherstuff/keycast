@@ -169,10 +169,13 @@
 
                 showOAuthStatus('Getting OAuth authorization...', 'info');
 
-                // OAuth approve
+                // OAuth approve - send JWT token in Authorization header
                 const approveResp = await fetch(`${apiUrl}/api/oauth/authorize`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${jwtToken}`
+                    },
                     body: JSON.stringify({
                         client_id: 'nostr-web-client',
                         redirect_uri: 'http://localhost:8000/callback',
@@ -181,7 +184,10 @@
                     })
                 });
                 const approveData = await approveResp.json();
-                if (!approveResp.ok) throw new Error('OAuth failed');
+                if (!approveResp.ok) {
+                    console.error('OAuth approve failed:', approveData);
+                    throw new Error(approveData.error || 'OAuth failed');
+                }
 
                 showOAuthStatus('Exchanging code for bunker URL...', 'info');
 
