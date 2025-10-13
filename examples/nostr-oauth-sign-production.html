@@ -37,9 +37,12 @@
 
     <div class="section">
         <h2>Step 1: Get Bunker URL</h2>
-        <input type="email" id="email" placeholder="Email" value="test@example.com">
+        <input type="email" id="email" placeholder="Email" value="">
         <input type="password" id="password" placeholder="Password" value="password123">
         <button onclick="getBunkerUrl()" id="getBunkerBtn">Get Bunker URL</button>
+        <p style="font-size: 12px; color: #888; margin-top: 10px;">
+            💡 Tip: Leave email blank to auto-generate a unique test account, or enter your own email to use an existing account.
+        </p>
         <div id="oauthStatus"></div>
 
         <div id="bunkerResult" style="display:none; margin-top: 15px;">
@@ -122,9 +125,15 @@
         }
 
         async function getBunkerUrl() {
-            const email = document.getElementById('email').value;
+            let email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const apiUrl = 'https://oauth.divine.video';
+
+            // Auto-generate unique email if blank
+            if (!email || email.trim() === '') {
+                email = `test-${Date.now()}@example.com`;
+                document.getElementById('email').value = email;
+            }
 
             try {
                 showOAuthStatus('Registering...', 'info');
