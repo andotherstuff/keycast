@@ -371,7 +371,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Cookie': `session=${jwtToken}`
+                        'Authorization': `Bearer ${jwtToken}`
                     },
                     body: JSON.stringify({
                         client_id: clientId,
@@ -444,7 +444,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Cookie': `session=${jwtToken}`
+                        'Authorization': `Bearer ${jwtToken}`
                     },
                     body: JSON.stringify({
                         client_id: clientId,
