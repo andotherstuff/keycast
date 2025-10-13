@@ -18,7 +18,8 @@ steps:
       - 'push'
       - 'us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
 
-  # Deploy to Cloud Run - NO COMMAND OVERRIDE
+  # Deploy to Cloud Run - Use Dockerfile ENTRYPOINT (which starts signer + api)
+  # Pass empty --command to reset to Docker's ENTRYPOINT+CMD
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -33,6 +34,7 @@ steps:
       - '--memory=2Gi'
       - '--cpu=2'
       - '--timeout=300'
+      - '--command='
       - '--set-env-vars'
       - 'NODE_ENV=production,RUST_LOG=info,WEB_BUILD_DIR=/app/web,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID},CORS_ALLOWED_ORIGIN=https://oauth.divine.video,APP_URL=https://oauth.divine.video,FROM_EMAIL=noreply@oauth.divine.video'
       - '--update-secrets'
