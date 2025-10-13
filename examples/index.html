@@ -1,0 +1,76 @@
+<!-- ABOUTME: Index page for Keycast test examples -->
+<!-- ABOUTME: Lists all available test clients for testing OAuth and NIP-46 functionality -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Keycast Test Examples</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      line-height: 1.6;
+    }
+    h1 { color: #bb86fc; margin-top: 20px; }
+    h2 { color: #03dac6; margin-top: 40px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+    a { color: #03dac6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .test-links { background: #2a2a2a; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .test-links ul { margin: 10px 0; }
+    .test-links li { margin: 12px 0; }
+    .description { color: #aaa; font-size: 0.9em; margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <h1>🔑 Keycast Test Examples</h1>
+
+  <p>
+    These test clients demonstrate the Keycast authentication and signing flows.
+    Each example tests different aspects of the NIP-46 remote signing and OAuth 2.0 integration.
+  </p>
+
+  <div class="test-links">
+    <h2>Available Test Clients</h2>
+    <ul>
+      <li>
+        <a href="keycast-test-bundled.html">Basic Keycast Test</a>
+        <span class="description">- Test authentication and signing flow with direct API calls</span>
+      </li>
+      <li>
+        <a href="oauth-test-client.html">OAuth Test Client</a>
+        <span class="description">- Full OAuth 2.0 authorization code flow</span>
+      </li>
+      <li>
+        <a href="nostr-oauth-sign-production.html">OAuth Sign Test (Production)</a>
+        <span class="description">- Test event signing with OAuth authorization</span>
+      </li>
+      <li>
+        <a href="nostr-client-oauth-ndk.html">NDK OAuth Client</a>
+        <span class="description">- OAuth client using Nostr Dev Kit (NDK)</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="test-links">
+    <h2>Development Files</h2>
+    <p style="color: #aaa; font-size: 0.9em;">
+      These files are for local development only and require a build step:
+    </p>
+    <ul>
+      <li>
+        <a href="keycast-test.html">keycast-test.html</a>
+        <span class="description">- Requires local TypeScript build</span>
+      </li>
+    </ul>
+  </div>
+
+  <p style="margin-top: 40px; color: #888; font-size: 0.9em;">
+    <a href="/">← Back to Keycast Home</a>
+  </p>
+</body>
+</html>
