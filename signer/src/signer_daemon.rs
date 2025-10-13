@@ -141,14 +141,13 @@ impl UnifiedSigner {
         };
 
         if handler_count == 0 {
-            tracing::warn!("No authorizations loaded, nothing to do");
-            return Ok(());
+            tracing::info!("Starting with 0 authorizations, will reload when new ones are created");
+        } else {
+            tracing::info!(
+                "Subscribing to ALL kind 24133 events on relay (managing {} bunker pubkeys)",
+                handler_count
+            );
         }
-
-        tracing::info!(
-            "Subscribing to ALL kind 24133 events on relay (managing {} bunker pubkeys)",
-            handler_count
-        );
 
         // OPTIMIZATION: Single subscription for ALL kind 24133 events
         // We'll filter by bunker pubkey in the handler, not at relay level
