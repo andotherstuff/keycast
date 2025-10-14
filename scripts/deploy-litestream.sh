@@ -38,11 +38,11 @@ echo "Service Account: $SERVICE_ACCOUNT"
 gsutil iam ch serviceAccount:$SERVICE_ACCOUNT:roles/storage.objectAdmin gs://$BUCKET_NAME
 echo "✅ Granted storage.objectAdmin to service account"
 
-# Step 3: Create or update litestream-config secret
+# Step 3: Create or update litestream-config in Secret Manager
 echo ""
-echo "🔒 Creating Litestream configuration secret..."
+echo "🔒 Creating Litestream configuration in Secret Manager..."
 if gcloud secrets describe litestream-config --project=$PROJECT_ID 2>/dev/null; then
-    echo "Secret already exists, creating new version..."
+    echo "Secret already exists in Secret Manager, creating new version..."
     gcloud secrets versions add litestream-config \
         --data-file=litestream.yml \
         --project=$PROJECT_ID
@@ -51,7 +51,7 @@ else
         --data-file=litestream.yml \
         --project=$PROJECT_ID
 fi
-echo "✅ Litestream config secret created/updated"
+echo "✅ Litestream config stored in Secret Manager"
 
 # Step 4: Update service.yaml with actual values
 echo ""
@@ -71,6 +71,8 @@ gcloud run services replace service-deploy.yaml \
 # Step 6: Update service constraints (single instance for SQLite)
 echo ""
 echo "⚙️  Configuring scaling limits..."
+echo "Note: min-instances=1 keeps warm instance (faster cold starts, continuous replication)"
+echo "      This slightly increases baseline cost but ensures data persistence."
 gcloud run services update $SERVICE_NAME \
     --region=$REGION \
     --project=$PROJECT_ID \

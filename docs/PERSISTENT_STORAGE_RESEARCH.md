@@ -72,10 +72,10 @@ containers:
 **CRITICAL FLAW: DOES NOT WORK FOR SQLITE**
 
 ❌ **Why it fails**:
-- GCS FUSE provides NO file locking
-- SQLite requires exclusive locks for writes
-- Concurrent writes corrupt the database
-- Quote from docs: "when multiple writes try to replace a file, the last write wins and all previous writes are lost"
+- GCS FUSE does not provide durable POSIX file locking
+- Object storage semantics (rename/locking) make SQLite unsafe
+- SQLite requires exclusive locks for safe writes
+- Concurrent writes will corrupt the database
 
 **Verdict**: ❌ **REJECTED** - Fundamentally incompatible with SQLite
 
@@ -143,8 +143,9 @@ Cloud Run Service (multi-container)
    - Mitigation: Explicitly set `PRAGMA auto_vacuum = NONE`
 
 3. **Container Lifecycle**
-   - Startup order matters: Litestream MUST start before API
-   - Cloud Run container dependencies: use startup probes
+   - **Cloud Run doesn't support inter-container dependencies**
+   - Use startup/readiness probes + app-level DB open retry (30s) to tolerate restore timing
+   - Litestream's restore creates `/data/keycast.db` if missing
    - Shutdown: SIGTERM gives 10 seconds before SIGKILL
    - Risk: Incomplete replication if shutdown too fast
    - Mitigation: Litestream hooks into SIGTERM for final flush
@@ -479,6 +480,9 @@ Migration 6 tries to add email_verified column
 - [ ] Create GCS bucket: `keycast-database-backups`
 - [ ] Grant Cloud Run service account access to bucket
 - [ ] Decide emptyDir volume size (recommend: 500Mi initially)
+- [ ] Choose CPU throttling mode:
+  - [ ] `cpu-throttling: false` = continuous replication (slightly higher cost)
+  - [ ] `cpu-throttling: true` = save $ (replication may lag between requests)
 
 ### Code Changes
 - [ ] Create `litestream.yml` configuration
@@ -491,9 +495,10 @@ Migration 6 tries to add email_verified column
 
 ### Deployment Changes
 - [ ] Set `--max-instances=1` on keycast-oauth service
+- [ ] Set `--min-instances=1` (keeps warm instance, continuous replication, slightly higher cost)
 - [ ] Add emptyDir volume definition
 - [ ] Add Litestream sidecar container
-- [ ] Configure container dependencies
+- [ ] Add startup/readiness probes (no inter-container dependencies in Cloud Run)
 - [ ] Update health checks for both containers
 
 ### Testing

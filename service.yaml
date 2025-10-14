@@ -10,7 +10,9 @@ spec:
     metadata:
       annotations:
         run.googleapis.com/execution-environment: gen2
-        run.googleapis.com/cpu-throttling: "true"
+        # Set to "false" for continuous replication (slightly higher cost)
+        # Set to "true" to save $ (replication may lag between requests)
+        run.googleapis.com/cpu-throttling: "false"
     spec:
       containerConcurrency: 80
       timeoutSeconds: 300
@@ -28,9 +30,7 @@ spec:
       containers:
         - name: keycast-api
           image: IMAGE_URL  # Will be replaced by deploy script
-          ports:
-            - name: http1
-              containerPort: 8080
+          # Note: Container must bind to $PORT (Cloud Run sets it)
           env:
             - name: DATABASE_PATH
               value: "/data/keycast.db"
@@ -79,7 +79,7 @@ spec:
             httpGet:
               path: /healthz/startup
               port: 8080
-            failureThreshold: 30
+            failureThreshold: 30  # 30 retries * 2s = 60s for DB restore + startup
             periodSeconds: 2
             timeoutSeconds: 3
           readinessProbe:
