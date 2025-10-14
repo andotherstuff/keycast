@@ -12,9 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 keycast_core = { path = "../core" }
+axum = { workspace = true }
 chrono = { workspace = true }
 config = { workspace = true }
+ctrlc = "3.4"
 dotenv = { workspace = true }
+libc = "0.2"
 nostr-sdk = {workspace = true}
 nostr = {workspace = true}
 nostr-connect = {version = "0.37", git="https://github.com/rust-nostr/nostr", rev="5ef7353789d54931b664639c11df1aa22e9aa37c"}

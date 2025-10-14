@@ -18,8 +18,7 @@ steps:
       - 'push'
       - 'us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
 
-  # Deploy to Cloud Run - Use Dockerfile ENTRYPOINT (which starts signer + api)
-  # Pass empty --command to reset to Docker's ENTRYPOINT+CMD
+  # Deploy API to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -34,11 +33,32 @@ steps:
       - '--memory=2Gi'
       - '--cpu=2'
       - '--timeout=300'
-      - '--command='
+      - '--args=api'
       - '--set-env-vars'
       - 'NODE_ENV=production,RUST_LOG=info,WEB_BUILD_DIR=/app/web,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID},CORS_ALLOWED_ORIGIN=https://oauth.divine.video,APP_URL=https://oauth.divine.video,FROM_EMAIL=noreply@oauth.divine.video'
       - '--update-secrets'
       - 'MASTER_KEY_PATH=keycast-master-key:latest,SENDGRID_API_KEY=keycast-sendgrid-api-key:latest,JWT_SECRET=keycast-jwt-secret:latest'
+
+  # Deploy Signer to Cloud Run (separate service with HTTP health endpoint)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'keycast-signer'
+      - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--no-allow-unauthenticated'
+      - '--port=8080'
+      - '--memory=1Gi'
+      - '--cpu=1'
+      - '--timeout=300'
+      - '--args=signer'
+      - '--set-env-vars'
+      - 'RUST_LOG=info,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID}'
+      - '--update-secrets'
+      - 'MASTER_KEY_PATH=keycast-master-key:latest'
 
   # Smoke tests - verify deployment
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'

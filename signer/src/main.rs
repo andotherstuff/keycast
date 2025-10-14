@@ -1,6 +1,7 @@
-// ABOUTME: Main entry point for unified NIP-46 signer daemon
+// ABOUTME: Main entry point for unified NIP-46 signer daemon with HTTP health endpoint
 // ABOUTME: Handles all bunker URLs in a single process, routing requests to appropriate authorizations
 
+use axum::{routing::get, Router};
 use dotenv::dotenv;
 use keycast_core::database::Database;
 use keycast_core::encryption::file_key_manager::FileKeyManager;
@@ -15,6 +16,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 // Import the unified signer from signer_daemon module
 mod signer_daemon;
 use signer_daemon::UnifiedSigner;
+
+// Health check endpoint handler
+async fn health() -> &'static str {
+    "OK"
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,7 +108,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🤙 Unified signer daemon ready, listening for NIP-46 requests");
 
-    signer.run().await?;
+    // Get port from environment or use default
+    let port = env::var("PORT")
+        .unwrap_or_else(|_| "8080".to_string())
+        .parse::<u16>()
+        .unwrap_or(8080);
+
+    // Build HTTP router for health checks
+    let app = Router::new().route("/health", get(health));
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+    println!("🌐 HTTP health server listening on {}", addr);
+
+    // Spawn HTTP server in background
+    let http_server = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // Run NIP-46 signer (blocks forever)
+    let signer_task = tokio::spawn(async move {
+        signer.run().await.unwrap();
+    });
+
+    // Wait for either task to complete (they shouldn't unless there's an error)
+    tokio::select! {
+        res = http_server => {
+            tracing::error!("HTTP server exited: {:?}", res);
+        }
+        res = signer_task => {
+            tracing::error!("Signer task exited: {:?}", res);
+        }
+    }
 
     Ok(())
 }
