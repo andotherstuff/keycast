@@ -92,6 +92,9 @@ COPY ./database ./database
 # Copy example HTML files for testing
 COPY ./examples ./examples
 
+# Copy public HTML files (landing, login, register, dashboard, profile)
+COPY ./public ./public
+
 # Copy keycast-login library that test files import from
 COPY ./keycast-login ./keycast-login
 
