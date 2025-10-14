@@ -3,6 +3,7 @@ members = ["api", "core", "signer"]
 resolver = "2"
 
 [workspace.dependencies]
+axum = "0.7"
 base64 = "0.22"
 chrono = {version = "0.4", features = ["serde"]}
 config = "0.15"
