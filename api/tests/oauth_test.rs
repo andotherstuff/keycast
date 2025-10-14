@@ -414,3 +414,213 @@ async fn test_oauth_bunker_uses_personal_key() {
     assert_eq!(bunker_pubkey_in_db, user_pubkey,
         "bunker_public_key in database should match user's actual public key");
 }
+
+#[tokio::test]
+async fn test_oauth_authorize_uses_authenticated_user_not_most_recent() {
+    use keycast_api::state::KeycastState;
+
+    // Setup test database
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    sqlx::migrate!("../database/migrations")
+        .run(&pool)
+        .await
+        .unwrap();
+
+    let key_manager = Box::new(TestKeyManager::new());
+    let state = Arc::new(KeycastState {
+        db: pool.clone(),
+        key_manager,
+    });
+
+    let app = keycast_api::api::http::routes::routes(pool.clone(), state);
+
+    // Register FIRST user (Alice)
+    let alice_email = "alice@example.com";
+    let alice_req = Request::builder()
+        .method("POST")
+        .uri("/auth/register")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "email": alice_email,
+                "password": "alicepass"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let alice_resp = app.clone().oneshot(alice_req).await.unwrap();
+    assert_eq!(alice_resp.status(), StatusCode::OK);
+
+    let alice_body = alice_resp.into_body().collect().await.unwrap().to_bytes();
+    let alice_json: serde_json::Value = serde_json::from_slice(&alice_body).unwrap();
+    let alice_token = alice_json["token"].as_str().unwrap();
+    let alice_pubkey = alice_json["pubkey"].as_str().unwrap();
+
+    // Register SECOND user (Bob) - he becomes the "most recent" user
+    let bob_email = "bob@example.com";
+    let bob_req = Request::builder()
+        .method("POST")
+        .uri("/auth/register")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "email": bob_email,
+                "password": "bobpass"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let bob_resp = app.clone().oneshot(bob_req).await.unwrap();
+    assert_eq!(bob_resp.status(), StatusCode::OK);
+
+    let bob_body = bob_resp.into_body().collect().await.unwrap().to_bytes();
+    let bob_json: serde_json::Value = serde_json::from_slice(&bob_body).unwrap();
+    let _bob_token = bob_json["token"].as_str().unwrap();
+    let bob_pubkey = bob_json["pubkey"].as_str().unwrap();
+
+    // Verify they're different users
+    assert_ne!(alice_pubkey, bob_pubkey);
+
+    // CRITICAL TEST: Alice approves OAuth with HER token
+    // The buggy code uses "ORDER BY created_at DESC LIMIT 1" which would return Bob (most recent)
+    // The correct code should use Alice's token to identify HER as the authenticated user
+    let approve_req = Request::builder()
+        .method("POST")
+        .uri("/oauth/authorize")
+        .header("content-type", "application/json")
+        .header("Authorization", format!("Bearer {}", alice_token))  // Alice's JWT
+        .body(Body::from(
+            json!({
+                "client_id": "testapp",
+                "redirect_uri": "http://localhost:3000/callback",
+                "scope": "sign_event",
+                "approved": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let approve_resp = app.clone().oneshot(approve_req).await.unwrap();
+    assert_eq!(approve_resp.status(), StatusCode::OK);
+
+    let approve_body = approve_resp.into_body().collect().await.unwrap().to_bytes();
+    let approve_json: serde_json::Value = serde_json::from_slice(&approve_body).unwrap();
+    let code = approve_json["code"].as_str().unwrap();
+
+    // Verify the authorization code was created for ALICE, not Bob
+    let (code_user_pubkey,): (String,) = sqlx::query_as(
+        "SELECT user_public_key FROM oauth_codes WHERE code = ?1"
+    )
+    .bind(code)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        code_user_pubkey, alice_pubkey,
+        "SECURITY BUG: OAuth code should be for Alice (authenticated user), not Bob (most recent user)"
+    );
+}
+
+#[tokio::test]
+async fn test_nostr_connect_uses_authenticated_user_not_most_recent() {
+    use keycast_api::state::KeycastState;
+
+    // Setup test database
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    sqlx::migrate!("../database/migrations")
+        .run(&pool)
+        .await
+        .unwrap();
+
+    let key_manager = Box::new(TestKeyManager::new());
+    let state = Arc::new(KeycastState {
+        db: pool.clone(),
+        key_manager,
+    });
+
+    let app = keycast_api::api::http::routes::routes(pool.clone(), state);
+
+    // Register FIRST user (Alice)
+    let alice_email = "alice@example.com";
+    let alice_req = Request::builder()
+        .method("POST")
+        .uri("/auth/register")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "email": alice_email,
+                "password": "alicepass"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let alice_resp = app.clone().oneshot(alice_req).await.unwrap();
+    assert_eq!(alice_resp.status(), StatusCode::OK);
+
+    let alice_body = alice_resp.into_body().collect().await.unwrap().to_bytes();
+    let alice_json: serde_json::Value = serde_json::from_slice(&alice_body).unwrap();
+    let alice_token = alice_json["token"].as_str().unwrap();
+    let alice_pubkey = alice_json["pubkey"].as_str().unwrap();
+
+    // Register SECOND user (Bob) - he becomes the "most recent" user
+    let bob_email = "bob@example.com";
+    let bob_req = Request::builder()
+        .method("POST")
+        .uri("/auth/register")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "email": bob_email,
+                "password": "bobpass"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let bob_resp = app.clone().oneshot(bob_req).await.unwrap();
+    assert_eq!(bob_resp.status(), StatusCode::OK);
+
+    let bob_body = bob_resp.into_body().collect().await.unwrap().to_bytes();
+    let bob_json: serde_json::Value = serde_json::from_slice(&bob_body).unwrap();
+    let _bob_token = bob_json["token"].as_str().unwrap();
+    let bob_pubkey = bob_json["pubkey"].as_str().unwrap();
+
+    // Verify they're different users
+    assert_ne!(alice_pubkey, bob_pubkey);
+
+    // CRITICAL TEST: Alice approves nostr-login connection with HER token
+    // The buggy code uses "ORDER BY created_at DESC LIMIT 1" which would return Bob (most recent)
+    // The correct code should use Alice's token to identify HER as the authenticated user
+    use axum::http::header;
+    let connect_req = Request::builder()
+        .method("POST")
+        .uri("/oauth/connect")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::AUTHORIZATION, format!("Bearer {}", alice_token))  // Alice's JWT
+        .body(Body::from(
+            "client_pubkey=abcd1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab&relay=wss://relay.damus.io&secret=test_secret&approved=true"
+        ))
+        .unwrap();
+
+    let connect_resp = app.clone().oneshot(connect_req).await.unwrap();
+    assert_eq!(connect_resp.status(), StatusCode::OK);
+
+    // Verify OAuth authorization was created for ALICE, not Bob
+    let (auth_user_pubkey,): (String,) = sqlx::query_as(
+        "SELECT user_public_key FROM oauth_authorizations
+         WHERE client_public_key = 'abcd1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab'
+         ORDER BY created_at DESC LIMIT 1"
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        auth_user_pubkey, alice_pubkey,
+        "SECURITY BUG: nostr-login authorization should be for Alice (authenticated user), not Bob (most recent user)"
+    );
+}

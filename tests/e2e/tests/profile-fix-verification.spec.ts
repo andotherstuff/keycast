@@ -18,7 +18,7 @@ test.describe('Profile Publishing Fix Verification', () => {
     const email = `test-${timestamp}@example.com`;
     const password = 'testpass123';
 
-    await page.goto('http://localhost:3000/register.html');
+    await page.goto('http://localhost:3000/register');
     await page.fill('#email', email);
     await page.fill('#password', password);
     await page.fill('#confirmPassword', password);
@@ -34,7 +34,7 @@ test.describe('Profile Publishing Fix Verification', () => {
     expect(pubkey).toMatch(/^[0-9a-f]{64}$/);
 
     // Navigate to profile
-    await page.goto('http://localhost:3000/profile.html');
+    await page.goto('http://localhost:3000/profile');
     await page.waitForSelector('#profileForm', { timeout: 10000 });
 
     // Fill profile

@@ -1,0 +1,108 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: keycast-oauth
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cpu-throttling: "true"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      serviceAccountName: PROJECT_ID@appspot.gserviceaccount.com  # Will be replaced by deploy script
+      volumes:
+        - name: database
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: litestream-config
+          secret:
+            secretName: litestream-config
+            items:
+              - key: litestream.yml
+                path: litestream.yml
+      containers:
+        - name: keycast-api
+          image: IMAGE_URL  # Will be replaced by deploy script
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: DATABASE_PATH
+              value: "/data/keycast.db"
+            - name: NODE_ENV
+              value: "production"
+            - name: RUST_LOG
+              value: "info"
+            - name: WEB_BUILD_DIR
+              value: "/app/web"
+            - name: USE_GCP_KMS
+              value: "true"
+            - name: GCP_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: keycast-gcp-project
+                  key: project_id
+            - name: CORS_ALLOWED_ORIGIN
+              value: "https://oauth.divine.video"
+            - name: APP_URL
+              value: "https://oauth.divine.video"
+            - name: FROM_EMAIL
+              value: "noreply@oauth.divine.video"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: keycast-jwt-secret
+                  key: latest
+            - name: SENDGRID_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: keycast-sendgrid-api-key
+                  key: latest
+            - name: MASTER_KEY_PATH
+              valueFrom:
+                secretKeyRef:
+                  name: keycast-master-key
+                  key: latest
+          volumeMounts:
+            - name: database
+              mountPath: /data
+          resources:
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          startupProbe:
+            httpGet:
+              path: /healthz/startup
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 2
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+            timeoutSeconds: 3
+
+        - name: litestream
+          image: litestream/litestream:0.3
+          args: ["replicate"]
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/secrets/google/key.json"
+          volumeMounts:
+            - name: database
+              mountPath: /data
+            - name: litestream-config
+              mountPath: /etc/litestream.yml
+              subPath: litestream.yml
+          resources:
+            limits:
+              cpu: "200m"
+              memory: "256Mi"

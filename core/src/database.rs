@@ -42,7 +42,7 @@ impl Database {
             }
         }
 
-        // Create connection pool with more robust settings
+        // Create connection pool with Litestream-compatible settings
         eprintln!("Creating connection pool...");
         let pool = SqlitePoolOptions::new()
             .acquire_timeout(Duration::from_secs(10)) // Increased timeout
@@ -50,10 +50,24 @@ impl Database {
             .after_connect(|conn, _| {
                 Box::pin(async move {
                     let conn = &mut *conn;
+                    // Enable WAL mode for Litestream compatibility
                     sqlx::query("PRAGMA journal_mode=WAL")
                         .execute(&mut *conn)
                         .await?;
-                    sqlx::query("PRAGMA busy_timeout=10000")
+                    // Good durability/latency trade-off
+                    sqlx::query("PRAGMA synchronous=NORMAL")
+                        .execute(&mut *conn)
+                        .await?;
+                    // Let Litestream manage checkpoints
+                    sqlx::query("PRAGMA wal_autocheckpoint=0")
+                        .execute(&mut *conn)
+                        .await?;
+                    // Avoid SQLITE_BUSY thrash
+                    sqlx::query("PRAGMA busy_timeout=5000")
+                        .execute(&mut *conn)
+                        .await?;
+                    // Enable foreign keys
+                    sqlx::query("PRAGMA foreign_keys=ON")
                         .execute(&mut *conn)
                         .await?;
                     Ok(())

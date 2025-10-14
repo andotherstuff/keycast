@@ -1,0 +1,59 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - heading "Keycast Provider Test" [level=1] [ref=e2]
+  - generic [ref=e3]:
+    - heading "Configuration" [level=2] [ref=e4]
+    - generic [ref=e5]:
+      - text: "Domain:"
+      - textbox "Domain:" [ref=e6]:
+        - /placeholder: oauth.divine.video
+        - text: localhost:3000
+    - generic [ref=e7]:
+      - text: "API Base:"
+      - textbox "API Base:" [ref=e8]:
+        - /placeholder: /api
+        - text: /api
+  - generic [ref=e9]:
+    - heading "Authentication" [level=2] [ref=e10]
+    - generic [ref=e11]:
+      - text: "Email:"
+      - textbox "Email:" [ref=e12]:
+        - /placeholder: user@example.com
+        - text: test-login-1760326089004@example.com
+    - generic [ref=e13]:
+      - text: "Password:"
+      - textbox "Password:" [ref=e14]:
+        - /placeholder: password
+        - text: testpass123
+    - button "Register" [ref=e15] [cursor=pointer]
+    - button "Login" [ref=e16] [cursor=pointer]
+    - button "Disconnect" [disabled] [ref=e17]
+    - generic [ref=e18]: error
+    - generic [ref=e19]: "[10:28:12 PM] Creating KeycastProvider... [10:28:12 PM] Logging in as test-login-1760326089004@example.com... [10:28:43 PM] ERROR: NIP-46 request timeout"
+  - generic [ref=e20]:
+    - heading "Public Key" [level=2] [ref=e21]
+    - button "Get Public Key" [disabled] [ref=e22]
+  - generic [ref=e24]:
+    - heading "Sign Event" [level=2] [ref=e25]
+    - generic [ref=e26]:
+      - text: "Event Content:"
+      - textbox "Event Content:" [ref=e27]:
+        - /placeholder: Event content
+        - text: Hello from Keycast!
+    - button "Sign Event" [disabled] [ref=e28]
+  - generic [ref=e30]:
+    - heading "Encryption (NIP-44)" [level=2] [ref=e31]
+    - generic [ref=e32]:
+      - text: "Target Pubkey (hex):"
+      - textbox "Target Pubkey (hex):" [ref=e33]:
+        - /placeholder: hex pubkey for encryption
+    - generic [ref=e34]:
+      - text: "Plaintext:"
+      - textbox "Plaintext:" [ref=e35]:
+        - /placeholder: Message to encrypt
+        - text: Secret message
+    - button "Encrypt" [disabled] [ref=e36]
+    - button "Decrypt" [disabled] [ref=e37]
+```

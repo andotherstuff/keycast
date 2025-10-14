@@ -77,7 +77,7 @@ RUN apt-get update && apt-get install -y \
 RUN curl -fsSL https://bun.sh/install | bash
 
 # Create necessary directories
-RUN mkdir -p /app/database
+RUN mkdir -p /app/database /data
 
 # Copy built artifacts
 COPY --from=rust-builder /app/target/release/keycast_api ./
@@ -86,8 +86,8 @@ COPY --from=web-builder /app/build ./web
 COPY --from=web-builder /app/package.json ./
 COPY --from=web-builder /app/node_modules ./node_modules
 
-# Copy database migrations
-COPY ./database ./database
+# Copy ONLY database migrations (not the .db files)
+COPY ./database/migrations ./database/migrations
 
 # Copy example HTML files for testing
 COPY ./examples ./examples

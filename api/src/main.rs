@@ -69,14 +69,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up database
     let root_dir = env!("CARGO_MANIFEST_DIR");
-    let database_url = PathBuf::from(root_dir)
-        .parent()
-        .unwrap()
-        .join("database/keycast.db");
+
+    // Support DATABASE_PATH env var for Litestream compatibility
+    // Default to /data/keycast.db for Cloud Run, fallback to local path for dev
+    let database_url = env::var("DATABASE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(root_dir)
+                .parent()
+                .unwrap()
+                .join("database/keycast.db")
+        });
+
     let database_migrations = PathBuf::from(root_dir)
         .parent()
         .unwrap()
         .join("database/migrations");
+
+    eprintln!("Database path: {:?}", database_url);
     let database = Database::new(database_url.clone(), database_migrations.clone()).await?;
     println!("✔︎ Database initialized");
 
@@ -143,6 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/docs", get(technical_docs::technical_docs))
         .route("/health", get(health_check))
+        .route("/healthz/startup", get(health_startup))
+        .route("/healthz/ready", get(health_ready))
         .route("/.well-known/nostr.json", get(api::http::nostr_discovery_public))
         .with_state(get_db_pool().unwrap().clone())
         .route("/login", get(serve_html("login.html")))
@@ -157,7 +169,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✔︎ Static files served from /examples and /public");
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    // Get port from PORT env var or default to 3000 for local development
+    let port: u16 = env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000);
+
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("✔︎ API listening on {}", listener.local_addr().unwrap());
     println!("🤙 Keycast API ready! LFG!");
     println!("================================================");
@@ -169,6 +188,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn health_check() -> impl IntoResponse {
     StatusCode::OK
+}
+
+async fn health_startup() -> impl IntoResponse {
+    // Simple liveness check - process is up
+    StatusCode::OK
+}
+
+async fn health_ready() -> impl IntoResponse {
+    // Readiness check - verify database is accessible
+    match get_db_pool() {
+        Ok(pool) => {
+            match sqlx::query_scalar::<_, i64>("SELECT 1")
+                .fetch_one(pool)
+                .await
+            {
+                Ok(_) => StatusCode::OK,
+                Err(e) => {
+                    eprintln!("Database readiness check failed: {:?}", e);
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 async fn landing_page() -> Html<&'static str> {

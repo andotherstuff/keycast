@@ -17,9 +17,11 @@
 		"key:generate:force": "./scripts/generate_key.sh --force"
 	},
 	"devDependencies": {
-		"concurrently": "^9.1.2"
+		"concurrently": "^9.1.2",
+		"playwright": "^1.56.0"
 	},
 	"dependencies": {
-		"@types/bun": "^1.2.5"
+		"@types/bun": "^1.2.5",
+		"nostr-tools": "^2.10.2"
 	}
 }
