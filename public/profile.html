@@ -564,7 +564,29 @@
 
                 // Publish to relays
                 const profileRelays = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nsec.app'];
-                await pool.publish(profileRelays, signedEvent);
+                const publishPromises = pool.publish(profileRelays, signedEvent);
+
+                console.log(`Publishing to ${publishPromises.length} relays...`);
+
+                // Wait for at least one relay to accept the event
+                // Use Promise.any to succeed as soon as one relay accepts
+                try {
+                    const publishedRelay = await Promise.any(publishPromises);
+                    console.log(`✓ Published to relay: ${publishedRelay}`);
+
+                    // Log results from all relays for debugging
+                    const results = await Promise.allSettled(publishPromises);
+                    results.forEach((result, i) => {
+                        if (result.status === 'fulfilled') {
+                            console.log(`  ✓ ${profileRelays[i]}: ${result.value}`);
+                        } else {
+                            console.log(`  ✗ ${profileRelays[i]}: ${result.reason}`);
+                        }
+                    });
+                } catch (error) {
+                    console.error('All relay publishes failed:', error);
+                    throw new Error('Failed to publish to any relay');
+                }
 
                 // Save username to server for NIP-05
                 if (username) {
