@@ -38,27 +38,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_production = env::var("NODE_ENV").unwrap_or_default() == "production"
         || env::var("RUST_ENV").unwrap_or_default() == "production";
 
-    if is_production {
-        // JSON logging for production (Cloud Logging compatibility)
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .json()
-                    .with_target(true)
-                    .with_current_span(true)
-                    .with_span_list(true)
-            )
-            .init();
-        eprintln!("✔︎ Structured JSON logging enabled (production mode)");
-    } else {
-        // Human-readable logging for development
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-        println!("✔︎ Human-readable logging enabled (development mode)");
-    }
+    // Use plain text logging for Cloud Run - JSON format not being captured properly
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+    eprintln!("✔︎ Text logging enabled for Cloud Logging");
 
     // Setup shutdown signal handler
     tokio::spawn(async {
@@ -142,10 +127,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap()
         .join("public");
 
+    // Helper to serve HTML files without .html extension
+    let public_path_clone = public_path.clone();
+    let serve_html = move |filename: &'static str| {
+        let path = public_path_clone.clone();
+        move || async move {
+            let file_path = path.join(filename);
+            match tokio::fs::read_to_string(&file_path).await {
+                Ok(content) => (StatusCode::OK, [("content-type", "text/html")], content).into_response(),
+                Err(_) => (StatusCode::NOT_FOUND, "Page not found").into_response(),
+            }
+        }
+    };
+
     let app = Router::new()
         .route("/docs", get(technical_docs::technical_docs))
         .route("/health", get(health_check))
         .route("/.well-known/nostr.json", get(api::http::nostr_discovery_public))
+        .with_state(get_db_pool().unwrap().clone())
+        .route("/login", get(serve_html("login.html")))
+        .route("/register", get(serve_html("register.html")))
+        .route("/dashboard", get(serve_html("dashboard.html")))
+        .route("/profile", get(serve_html("profile.html")))
         .nest("/api", api::http::routes(get_db_pool().unwrap().clone(), KEYCAST_STATE.get().unwrap().clone()))
         .nest_service("/examples", ServeDir::new(examples_path))
         .nest_service("/", ServeDir::new(public_path))
