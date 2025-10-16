@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Multi-Tenancy Infrastructure (In Progress)**: Domain-based tenant isolation for running keycast at multiple domains
+  - Database migration adding `tenants` table and `tenant_id` to all tables
+  - Tenant resolution middleware (extracts tenant from Host header)
+  - Tenant management CLI (`scripts/manage-tenants.sh`)
+  - Research documents: architecture patterns, database options, query audit, implementation plan
+  - Decision: Stay on SQLite (sufficient for current scale), migrate to PostgreSQL at 1,000+ users
 - **Single Relay Subscription Architecture**: Optimized signer daemon to use ONE subscription for ALL kind 24133 events instead of one per user. Scales to millions of users with just 3 relay connections.
 - **Fast Reload Optimization**: Only decrypt last 5 new authorizations instead of all keys. Reduced reload time from 18-21 seconds to ~1.5 seconds.
 - **Comprehensive Technical Documentation**: Added `/docs` endpoint with deep dive into architecture, NIP-46, OAuth flow, encryption, relay architecture, and security model.

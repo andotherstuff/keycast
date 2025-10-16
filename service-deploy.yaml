@@ -16,7 +16,7 @@ spec:
     spec:
       containerConcurrency: 80
       timeoutSeconds: 300
-      serviceAccountName: PROJECT_ID@appspot.gserviceaccount.com  # Will be replaced by deploy script
+      serviceAccountName: openvine-co@appspot.gserviceaccount.com  # Will be replaced by deploy script
       volumes:
         - name: database
           emptyDir:
@@ -29,7 +29,7 @@ spec:
                 path: litestream.yml
       containers:
         - name: keycast-api
-          image: IMAGE_URL  # Will be replaced by deploy script
+          image: us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest  # Will be replaced by deploy script
           ports:
             - containerPort: 8080
           # Note: Container must bind to $PORT (Cloud Run sets it)

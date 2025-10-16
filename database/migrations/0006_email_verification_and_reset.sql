@@ -1,8 +1,8 @@
 -- Email verification and password reset
 -- This migration adds support for email verification and password reset tokens
+-- Note: email_verified column already added in migration 0002
 
--- Add email verification fields to users table
-ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT 0;
+-- Add email verification fields to users table (email_verified already exists from migration 0002)
 ALTER TABLE users ADD COLUMN email_verification_token TEXT;
 ALTER TABLE users ADD COLUMN email_verification_expires_at DATETIME;
 

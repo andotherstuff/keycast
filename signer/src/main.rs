@@ -79,10 +79,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up database
     let root_dir = env!("CARGO_MANIFEST_DIR");
-    let database_url = PathBuf::from(root_dir)
-        .parent()
-        .unwrap()
-        .join("database/keycast.db");
+
+    // Support DATABASE_PATH env var for Litestream compatibility
+    // Default to /data/keycast.db for Cloud Run, fallback to local path for dev
+    let database_url = env::var("DATABASE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(root_dir)
+                .parent()
+                .unwrap()
+                .join("database/keycast.db")
+        });
+
     let database_migrations = PathBuf::from(root_dir)
         .parent()
         .unwrap()
