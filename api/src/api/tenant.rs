@@ -219,6 +219,11 @@ fn validate_domain(domain: &str) -> Result<(), TenantError> {
         return Err(TenantError::InvalidDomain("Domain too long".to_string()));
     }
 
+    // Allow localhost for local development and testing
+    if domain == "localhost" {
+        return Ok(());
+    }
+
     // Must contain at least one dot (prevent localhost, etc)
     if !domain.contains('.') {
         return Err(TenantError::ValidationFailed(
@@ -233,9 +238,8 @@ fn validate_domain(domain: &str) -> Result<(), TenantError> {
         ));
     }
 
-    // Reject localhost, internal IPs, and special domains
+    // Reject internal IPs and special domains (but not localhost)
     let blocked_patterns = [
-        "localhost",
         "127.",
         "192.168.",
         "10.",
