@@ -9,6 +9,20 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
+use thiserror::Error;
+
+/// Error type for tenant operations
+#[derive(Error, Debug)]
+pub enum TenantError {
+    #[error("Invalid domain: {0}")]
+    InvalidDomain(String),
+
+    #[error("Database error: {0}")]
+    DatabaseError(#[from] sqlx::Error),
+
+    #[error("Domain validation failed: {0}")]
+    ValidationFailed(String),
+}
 
 /// Represents a tenant in the system
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -98,13 +112,35 @@ where
                 )
             })?;
 
-        // Query tenant by domain
-        let tenant = get_tenant_by_domain(pool, domain).await.map_err(|e| {
-            tracing::error!("Failed to get tenant for domain {}: {}", domain, e);
-            (
-                StatusCode::NOT_FOUND,
-                format!("Tenant not found for domain: {}", domain),
-            )
+        // Get or create tenant (auto-provision if needed)
+        let tenant = get_or_create_tenant(pool, domain).await.map_err(|e| {
+            tracing::error!("Failed to get/create tenant for domain {}: {}", domain, e);
+            match e {
+                TenantError::InvalidDomain(_) | TenantError::ValidationFailed(_) => {
+                    tracing::warn!(
+                        target: "tenant_validation",
+                        domain = %domain,
+                        error = %e,
+                        "Domain validation failed"
+                    );
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Invalid domain: {}", domain),
+                    )
+                },
+                TenantError::DatabaseError(_) => {
+                    tracing::error!(
+                        target: "tenant_auto_provision",
+                        domain = %domain,
+                        error = %e,
+                        "Failed to provision tenant"
+                    );
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to provision tenant".to_string(),
+                    )
+                },
+            }
         })?;
 
         Ok(TenantExtractor(Arc::new(tenant)))
@@ -169,6 +205,144 @@ pub async fn list_tenants(pool: &SqlitePool) -> Result<Vec<Tenant>, sqlx::Error>
     )
     .fetch_all(pool)
     .await
+}
+
+/// Validate domain format to prevent abuse
+fn validate_domain(domain: &str) -> Result<(), TenantError> {
+    // Basic validation rules
+    if domain.is_empty() {
+        return Err(TenantError::InvalidDomain("Domain cannot be empty".to_string()));
+    }
+
+    // Length check (max 253 chars per DNS spec)
+    if domain.len() > 253 {
+        return Err(TenantError::InvalidDomain("Domain too long".to_string()));
+    }
+
+    // Must contain at least one dot (prevent localhost, etc)
+    if !domain.contains('.') {
+        return Err(TenantError::ValidationFailed(
+            "Domain must contain at least one dot".to_string()
+        ));
+    }
+
+    // Basic character validation (alphanumeric, dots, hyphens)
+    if !domain.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
+        return Err(TenantError::InvalidDomain(
+            "Domain contains invalid characters".to_string()
+        ));
+    }
+
+    // Reject localhost, internal IPs, and special domains
+    let blocked_patterns = [
+        "localhost",
+        "127.",
+        "192.168.",
+        "10.",
+        "172.",
+        ".local",
+        ".internal",
+        ".test",
+    ];
+
+    for pattern in &blocked_patterns {
+        if domain.contains(pattern) {
+            return Err(TenantError::ValidationFailed(
+                format!("Domain matches blocked pattern: {}", pattern)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Create default tenant settings JSON
+fn get_default_settings(domain: &str) -> String {
+    let settings = TenantSettings {
+        relay: Some("wss://relay.damus.io".to_string()),
+        email_from: Some(format!("noreply@{}", domain)),
+    };
+
+    serde_json::to_string(&settings)
+        .unwrap_or_else(|_| r#"{"relay":"wss://relay.damus.io","auto_provisioned":true}"#.to_string())
+}
+
+/// Generate friendly tenant name from domain
+fn generate_tenant_name(domain: &str) -> String {
+    // Extract primary domain (e.g., "example" from "example.com")
+    let parts: Vec<&str> = domain.split('.').collect();
+
+    if parts.len() >= 2 {
+        let base = parts[parts.len() - 2];
+        // Capitalize first letter
+        let mut chars = base.chars();
+        match chars.next() {
+            None => domain.to_string(),
+            Some(f) => f.to_uppercase().chain(chars).collect(),
+        }
+    } else {
+        domain.to_string()
+    }
+}
+
+/// Get tenant by domain, creating it if it doesn't exist
+///
+/// This enables auto-provisioning: when a new domain hits the server via CNAME,
+/// we automatically create a tenant record with default settings.
+///
+/// # Arguments
+/// * `pool` - Database connection pool
+/// * `domain` - Domain from Host header (e.g., "example.com")
+///
+/// # Returns
+/// * `Ok(Tenant)` - Existing or newly created tenant
+/// * `Err(TenantError)` - Database error or validation failure
+///
+/// # Security Considerations
+/// - Domain validation prevents obviously malicious inputs
+/// - Auto-provisioned tenants use restrictive defaults
+pub async fn get_or_create_tenant(
+    pool: &SqlitePool,
+    domain: &str,
+) -> Result<Tenant, TenantError> {
+    // 1. Validate domain format
+    validate_domain(domain)?;
+
+    // 2. Try to fetch existing tenant
+    match get_tenant_by_domain(pool, domain).await {
+        Ok(tenant) => {
+            tracing::debug!("Found existing tenant for domain: {}", domain);
+            Ok(tenant)
+        }
+        Err(sqlx::Error::RowNotFound) => {
+            // 3. Create new tenant with defaults
+            tracing::info!("Auto-provisioning new tenant for domain: {}", domain);
+
+            let default_settings = get_default_settings(domain);
+            let name = generate_tenant_name(domain);
+
+            let tenant = create_tenant(
+                pool,
+                domain,
+                &name,
+                Some(&default_settings),
+            )
+            .await?;
+
+            // 4. Log provisioning event for monitoring
+            tracing::info!(
+                target: "tenant_auto_provision",
+                domain = %domain,
+                tenant_id = tenant.id,
+                tenant_name = %name,
+                settings = %default_settings,
+                "Auto-provisioned new tenant"
+            );
+
+            Ok(tenant)
+        }
+        Err(e) => Err(TenantError::DatabaseError(e)),
+    }
 }
 
 #[cfg(test)]
