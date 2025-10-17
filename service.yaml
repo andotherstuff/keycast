@@ -32,10 +32,8 @@ spec:
           image: IMAGE_URL  # Will be replaced by deploy script
           ports:
             - containerPort: 3000
-          # Note: Container binds to port 3000 (overridden by $PORT env var in Cloud Run)
+          # Note: Cloud Run sets $PORT env var automatically
           env:
-            - name: PORT
-              value: "3000"
             - name: DATABASE_PATH
               value: "/data/keycast.db"
             - name: NODE_ENV
