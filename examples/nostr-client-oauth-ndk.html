@@ -332,7 +332,8 @@
                 const approveResponse = await fetch(`${apiUrl}/api/oauth/authorize`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${jwtToken}`
                     },
                     body: JSON.stringify({
                         client_id: clientId,
