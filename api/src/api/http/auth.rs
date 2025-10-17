@@ -258,16 +258,19 @@ pub(crate) fn extract_user_from_token(headers: &HeaderMap) -> Result<String, Aut
 
 /// Register a new user with email and password
 pub async fn register(
+    tenant: crate::api::tenant::TenantExtractor,
     State(auth_state): State<super::routes::AuthState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, AuthError> {
     let pool = &auth_state.state.db;
     let key_manager = auth_state.state.key_manager.as_ref();
-    tracing::info!("Registering new user with email: {}", req.email);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Registering new user with email: {} for tenant: {}", req.email, tenant_id);
 
-    // Check if email already exists
-    let existing: Option<(String,)> = sqlx::query_as("SELECT public_key FROM users WHERE email = ?1")
+    // Check if email already exists in this tenant
+    let existing: Option<(String,)> = sqlx::query_as("SELECT public_key FROM users WHERE email = ?1 AND tenant_id = ?2")
         .bind(&req.email)
+        .bind(tenant_id)
         .fetch_optional(pool)
         .await?;
 
@@ -305,10 +308,11 @@ pub async fn register(
 
     // Insert user with email verification token
     sqlx::query(
-        "INSERT INTO users (public_key, email, password_hash, email_verified, email_verification_token, email_verification_expires_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+        "INSERT INTO users (public_key, tenant_id, email, password_hash, email_verified, email_verification_token, email_verification_expires_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
     )
     .bind(public_key.to_hex())
+    .bind(tenant_id)
     .bind(&req.email)
     .bind(&password_hash)
     .bind(false) // email_verified
@@ -441,17 +445,20 @@ pub async fn register(
 
 /// Login with email and password, returns JWT token
 pub async fn login(
+    tenant: crate::api::tenant::TenantExtractor,
     State(auth_state): State<super::routes::AuthState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AuthError> {
     let pool = &auth_state.state.db;
-    tracing::info!("Login attempt for email: {}", req.email);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Login attempt for email: {} in tenant: {}", req.email, tenant_id);
 
-    // Fetch user with password hash
+    // Fetch user with password hash from this tenant
     let user: (String, String) = sqlx::query_as(
-        "SELECT public_key, password_hash FROM users WHERE email = ?1 AND password_hash IS NOT NULL"
+        "SELECT public_key, password_hash FROM users WHERE email = ?1 AND tenant_id = ?2 AND password_hash IS NOT NULL"
     )
     .bind(&req.email)
+    .bind(tenant_id)
     .fetch_optional(pool)
     .await?
     .ok_or(AuthError::InvalidCredentials)?;
@@ -489,21 +496,26 @@ pub async fn login(
 
 /// Get bunker URL for the authenticated user
 pub async fn get_bunker_url(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
 ) -> Result<Json<BunkerUrlResponse>, AuthError> {
     // Extract user pubkey from JWT token
     let user_pubkey = extract_user_from_token(&headers)?;
-    tracing::info!("Fetching bunker URL for user: {}", user_pubkey);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Fetching bunker URL for user: {} in tenant: {}", user_pubkey, tenant_id);
 
     // Get the user's OAuth authorization bunker URL for keycast-login
     let result: Option<(String, String)> = sqlx::query_as(
-        "SELECT bunker_public_key, secret FROM oauth_authorizations
-         WHERE user_public_key = ?1
-         AND application_id = (SELECT id FROM oauth_applications WHERE client_id = 'keycast-login')
-         ORDER BY created_at DESC LIMIT 1"
+        "SELECT oa.bunker_public_key, oa.secret FROM oauth_authorizations oa
+         JOIN users u ON oa.user_public_key = u.public_key
+         WHERE oa.user_public_key = ?1
+         AND u.tenant_id = ?2
+         AND oa.application_id = (SELECT id FROM oauth_applications WHERE client_id = 'keycast-login')
+         ORDER BY oa.created_at DESC LIMIT 1"
     )
     .bind(&user_pubkey)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await?;
 
@@ -523,17 +535,20 @@ pub async fn get_bunker_url(
 
 /// Verify email address with token
 pub async fn verify_email(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     Json(req): Json<VerifyEmailRequest>,
 ) -> Result<Json<VerifyEmailResponse>, AuthError> {
-    tracing::info!("Email verification attempt with token: {}...", &req.token[..10]);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Email verification attempt with token: {}... for tenant: {}", &req.token[..10], tenant_id);
 
-    // Find user with this verification token
+    // Find user with this verification token in this tenant
     let user: Option<(String, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
         "SELECT public_key, email_verification_expires_at FROM users
-         WHERE email_verification_token = ?1"
+         WHERE email_verification_token = ?1 AND tenant_id = ?2"
     )
     .bind(&req.token)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await?;
 
@@ -574,16 +589,19 @@ pub async fn verify_email(
 
 /// Request password reset email
 pub async fn forgot_password(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> Result<Json<ForgotPasswordResponse>, AuthError> {
-    tracing::info!("Password reset requested for email: {}", req.email);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Password reset requested for email: {} in tenant: {}", req.email, tenant_id);
 
-    // Check if user exists
+    // Check if user exists in this tenant
     let user: Option<(String,)> = sqlx::query_as(
-        "SELECT public_key FROM users WHERE email = ?1"
+        "SELECT public_key FROM users WHERE email = ?1 AND tenant_id = ?2"
     )
     .bind(&req.email)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await?;
 
@@ -639,17 +657,20 @@ pub async fn forgot_password(
 
 /// Reset password with token
 pub async fn reset_password(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     Json(req): Json<ResetPasswordRequest>,
 ) -> Result<Json<ResetPasswordResponse>, AuthError> {
-    tracing::info!("Password reset attempt with token: {}...", &req.token[..10]);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Password reset attempt with token: {}... for tenant: {}", &req.token[..10], tenant_id);
 
-    // Find user with this reset token
+    // Find user with this reset token in this tenant
     let user: Option<(String, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
         "SELECT public_key, password_reset_expires_at FROM users
-         WHERE password_reset_token = ?1"
+         WHERE password_reset_token = ?1 AND tenant_id = ?2"
     )
     .bind(&req.token)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await?;
 
@@ -693,18 +714,21 @@ pub async fn reset_password(
 
 /// Get username for NIP-05 - the only profile data we store server-side
 pub async fn get_profile(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileData>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
-    tracing::info!("Fetching username for user: {}", user_pubkey);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Fetching username for user: {} in tenant: {}", user_pubkey, tenant_id);
 
     // Get username from users table - this is the ONLY thing we store
     // The client should fetch actual kind 0 profile data from Nostr relays via bunker
     let username: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT username FROM users WHERE public_key = ?1"
+        "SELECT username FROM users WHERE public_key = ?1 AND tenant_id = ?2"
     )
     .bind(&user_pubkey)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await?;
 
@@ -726,13 +750,15 @@ pub async fn get_profile(
 /// Update username (for NIP-05) - the only profile data we store server-side
 /// Client should publish kind 0 profile events to relays via bunker URL
 pub async fn update_profile(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
     Json(profile): Json<ProfileData>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
+    let tenant_id = tenant.0.id;
 
-    tracing::info!("Updating username for user: {}", user_pubkey);
+    tracing::info!("Updating username for user: {} in tenant: {}", user_pubkey, tenant_id);
 
     // Only update username - everything else is stored on Nostr relays
     if let Some(ref username) = profile.username {
@@ -741,12 +767,13 @@ pub async fn update_profile(
             return Err(AuthError::Internal("Username can only contain letters, numbers, dashes, and underscores".to_string()));
         }
 
-        // Check if username is already taken
+        // Check if username is already taken in this tenant
         let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT public_key FROM users WHERE username = ?1 AND public_key != ?2"
+            "SELECT public_key FROM users WHERE username = ?1 AND public_key != ?2 AND tenant_id = ?3"
         )
         .bind(username)
         .bind(&user_pubkey)
+        .bind(tenant_id)
         .fetch_optional(&pool)
         .await?;
 
@@ -756,11 +783,12 @@ pub async fn update_profile(
 
         // Update username in users table
         sqlx::query(
-            "UPDATE users SET username = ?1, updated_at = ?2 WHERE public_key = ?3"
+            "UPDATE users SET username = ?1, updated_at = ?2 WHERE public_key = ?3 AND tenant_id = ?4"
         )
         .bind(username)
         .bind(Utc::now())
         .bind(&user_pubkey)
+        .bind(tenant_id)
         .execute(&pool)
         .await?;
 
@@ -793,11 +821,13 @@ pub struct BunkerSessionsResponse {
 
 /// List all active bunker sessions for the authenticated user
 pub async fn list_sessions(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
 ) -> Result<Json<BunkerSessionsResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
-    tracing::info!("Listing bunker sessions for user: {}", user_pubkey);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Listing bunker sessions for user: {} in tenant: {}", user_pubkey, tenant_id);
 
     // Get OAuth authorizations with application details and activity stats
     let oauth_sessions: Vec<(String, i64, String, String, Option<String>, String, Option<String>, Option<i64>)> = sqlx::query_as(
@@ -812,11 +842,14 @@ pub async fn list_sessions(
             (SELECT COUNT(*) FROM signing_activity WHERE bunker_secret = oa.secret) as activity_count
          FROM oauth_authorizations oa
          LEFT JOIN oauth_applications a ON oa.application_id = a.id
+         JOIN users u ON oa.user_public_key = u.public_key
          WHERE oa.user_public_key = ?1
+           AND u.tenant_id = ?2
            AND oa.revoked_at IS NULL
          ORDER BY oa.created_at DESC"
     )
     .bind(&user_pubkey)
+    .bind(tenant_id)
     .fetch_all(&pool)
     .await?;
 
@@ -852,18 +885,23 @@ pub struct SessionActivityResponse {
 
 /// Get activity log for a specific bunker session
 pub async fn get_session_activity(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
     axum::extract::Path(secret): axum::extract::Path<String>,
 ) -> Result<Json<SessionActivityResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
-    tracing::info!("Fetching activity for bunker secret: {}", secret);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Fetching activity for bunker secret: {} in tenant: {}", secret, tenant_id);
 
-    // Verify this bunker session belongs to the user
+    // Verify this bunker session belongs to the user in this tenant
     let session: Option<(String,)> = sqlx::query_as(
-        "SELECT user_public_key FROM oauth_authorizations WHERE secret = ?1"
+        "SELECT oa.user_public_key FROM oauth_authorizations oa
+         JOIN users u ON oa.user_public_key = u.public_key
+         WHERE oa.secret = ?1 AND u.tenant_id = ?2"
     )
     .bind(&secret)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await?;
 
@@ -909,23 +947,27 @@ pub struct RevokeSessionResponse {
 
 /// Revoke a bunker session
 pub async fn revoke_session(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     headers: HeaderMap,
     Json(req): Json<RevokeSessionRequest>,
 ) -> Result<Json<RevokeSessionResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
-    tracing::info!("Revoking bunker session for user: {}", user_pubkey);
+    let tenant_id = tenant.0.id;
+    tracing::info!("Revoking bunker session for user: {} in tenant: {}", user_pubkey, tenant_id);
 
-    // Verify this bunker session belongs to the user and revoke it
+    // Verify this bunker session belongs to the user in this tenant and revoke it
     let result = sqlx::query(
         "UPDATE oauth_authorizations
          SET revoked_at = ?1, updated_at = ?2
-         WHERE secret = ?3 AND user_public_key = ?4 AND revoked_at IS NULL"
+         WHERE secret = ?3 AND user_public_key = ?4 AND revoked_at IS NULL
+         AND user_public_key IN (SELECT public_key FROM users WHERE tenant_id = ?5)"
     )
     .bind(Utc::now())
     .bind(Utc::now())
     .bind(&req.secret)
     .bind(&user_pubkey)
+    .bind(tenant_id)
     .execute(&pool)
     .await?;
 

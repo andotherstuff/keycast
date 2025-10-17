@@ -23,35 +23,41 @@ use keycast_core::types::team::{KeyWithRelations, Team, TeamWithRelations};
 use keycast_core::types::user::{TeamUser, User};
 
 pub async fn list_teams(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
 ) -> ApiResult<Json<Vec<TeamWithRelations>>> {
-    let user = match User::find_by_pubkey(&pool, &event.pubkey).await {
+    let tenant_id = tenant.0.id;
+
+    let user = match User::find_by_pubkey(&pool, tenant_id, &event.pubkey).await {
         Ok(user) => user,
         Err(_) => {
             return Err(ApiError::not_found("User not found"));
         }
     };
 
-    let teams_with_relations = user.teams(&pool).await?;
+    let teams_with_relations = user.teams(&pool, tenant_id).await?;
 
     Ok(Json(teams_with_relations))
 }
 
 pub async fn create_team(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Json(request): Json<CreateTeamRequest>,
 ) -> ApiResult<Json<TeamWithRelations>> {
+    let tenant_id = tenant.0.id;
     let mut tx = pool.begin().await?;
 
     // First, try to insert the user if they don't exist
     sqlx::query(
         r#"
-            INSERT OR IGNORE INTO users (public_key, created_at, updated_at)
-            VALUES (?1, datetime('now'), datetime('now'))
+            INSERT OR IGNORE INTO users (tenant_id, public_key, created_at, updated_at)
+            VALUES (?1, ?2, datetime('now'), datetime('now'))
             "#,
     )
+    .bind(tenant_id)
     .bind(event.pubkey.to_hex())
     .execute(&mut *tx)
     .await?;
@@ -59,11 +65,12 @@ pub async fn create_team(
     // Then, insert the team
     let team = sqlx::query_as::<_, Team>(
         r#"
-            INSERT INTO teams (name, created_at, updated_at)
-            VALUES (?1, datetime('now'), datetime('now'))
+            INSERT INTO teams (tenant_id, name, created_at, updated_at)
+            VALUES (?1, ?2, datetime('now'), datetime('now'))
             RETURNING *
             "#,
     )
+    .bind(tenant_id)
     .bind(request.name)
     .fetch_one(&mut *tx)
     .await?;
@@ -71,11 +78,12 @@ pub async fn create_team(
     // Then, create the team_user relationship with admin role
     let team_user = sqlx::query_as::<_, TeamUser>(
         r#"
-            INSERT INTO team_users (team_id, user_public_key, role, created_at, updated_at)
-            VALUES (?1, ?2, 'admin', datetime('now'), datetime('now'))
+            INSERT INTO team_users (tenant_id, team_id, user_public_key, role, created_at, updated_at)
+            VALUES (?1, ?2, ?3, 'admin', datetime('now'), datetime('now'))
             RETURNING *
             "#,
     )
+    .bind(tenant_id)
     .bind(team.id)
     .bind(event.pubkey.to_hex())
     .fetch_one(&mut *tx)
@@ -84,11 +92,12 @@ pub async fn create_team(
     // Finally, create the default policy, default permission (all permissions allowed), and join them
     let policy = sqlx::query_as::<_, Policy>(
         r#"
-            INSERT INTO policies (team_id, name, created_at, updated_at)
-            VALUES (?1, 'All Access', datetime('now'), datetime('now'))
+            INSERT INTO policies (tenant_id, team_id, name, created_at, updated_at)
+            VALUES (?1, ?2, 'All Access', datetime('now'), datetime('now'))
             RETURNING *
             "#,
     )
+    .bind(tenant_id)
     .bind(team.id)
     .fetch_one(&mut *tx)
     .await?;
@@ -98,22 +107,24 @@ pub async fn create_team(
 
     let permission = sqlx::query_as::<_, Permission>(
         r#"
-            INSERT INTO permissions (identifier, config, created_at, updated_at)
-            VALUES ('allowed_kinds', ?1, datetime('now'), datetime('now'))
+            INSERT INTO permissions (tenant_id, identifier, config, created_at, updated_at)
+            VALUES (?1, 'allowed_kinds', ?2, datetime('now'), datetime('now'))
             RETURNING *
             "#,
     )
+    .bind(tenant_id)
     .bind(allowed_kinds_config)
     .fetch_one(&mut *tx)
     .await?;
 
     sqlx::query_as::<_, PolicyPermission>(
         r#"
-            INSERT INTO policy_permissions (policy_id, permission_id, created_at, updated_at)
-            VALUES (?1, ?2, datetime('now'), datetime('now'))
+            INSERT INTO policy_permissions (tenant_id, policy_id, permission_id, created_at, updated_at)
+            VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
             RETURNING *
             "#,
     )
+    .bind(tenant_id)
     .bind(policy.id)
     .bind(permission.id)
     .fetch_one(&mut *tx)
@@ -136,33 +147,38 @@ pub async fn create_team(
 }
 
 pub async fn get_team(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path(team_id): Path<u32>,
 ) -> ApiResult<Json<TeamWithRelations>> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
-    let team_with_relations = Team::find_with_relations(&pool, team_id).await?;
+    let team_with_relations = Team::find_with_relations(&pool, tenant_id, team_id).await?;
 
     Ok(Json(team_with_relations))
 }
 
 pub async fn update_team(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Json(request): Json<UpdateTeamRequest>,
 ) -> ApiResult<Json<Team>> {
-    verify_admin(&pool, &event.pubkey, request.id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, request.id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
     let team = sqlx::query_as::<_, Team>(
         r#"
-        UPDATE teams SET name = ?1 WHERE id = ?2
+        UPDATE teams SET name = ?1 WHERE tenant_id = ?2 AND id = ?3
         RETURNING *
         "#,
     )
     .bind(request.name)
+    .bind(tenant_id)
     .bind(request.id)
     .fetch_one(&mut *tx)
     .await?;
@@ -173,11 +189,13 @@ pub async fn update_team(
 }
 
 pub async fn delete_team(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path(team_id): Path<u32>,
 ) -> ApiResult<StatusCode> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -186,15 +204,16 @@ pub async fn delete_team(
     // Delete user_authorizations for all authorizations linked to stored keys in this team
     sqlx::query(
         r#"
-            DELETE FROM user_authorizations 
-            WHERE authorization_id IN (
-                SELECT a.id 
+            DELETE FROM user_authorizations
+            WHERE tenant_id = ?1 AND authorization_id IN (
+                SELECT a.id
                 FROM authorizations a
                 JOIN stored_keys sk ON a.stored_key_id = sk.id
-                WHERE sk.team_id = ?1
+                WHERE a.tenant_id = ?1 AND sk.tenant_id = ?1 AND sk.team_id = ?2
             )
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .execute(&mut *tx)
     .await?;
@@ -202,18 +221,20 @@ pub async fn delete_team(
     // Delete authorizations for all stored keys in this team
     sqlx::query(
         r#"
-            DELETE FROM authorizations 
-            WHERE stored_key_id IN (
-                SELECT id FROM stored_keys WHERE team_id = ?1
+            DELETE FROM authorizations
+            WHERE tenant_id = ?1 AND stored_key_id IN (
+                SELECT id FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2
             )
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .execute(&mut *tx)
     .await?;
 
     // Delete stored keys for this team
-    sqlx::query("DELETE FROM stored_keys WHERE team_id = ?1")
+    sqlx::query("DELETE FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2")
+        .bind(tenant_id)
         .bind(team_id)
         .execute(&mut *tx)
         .await?;
@@ -221,12 +242,13 @@ pub async fn delete_team(
     // Delete policy_permissions for all policies in this team
     sqlx::query(
         r#"
-            DELETE FROM policy_permissions 
-            WHERE policy_id IN (
-                SELECT id FROM policies WHERE team_id = ?1
+            DELETE FROM policy_permissions
+            WHERE tenant_id = ?1 AND policy_id IN (
+                SELECT id FROM policies WHERE tenant_id = ?1 AND team_id = ?2
             )
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .execute(&mut *tx)
     .await?;
@@ -234,34 +256,38 @@ pub async fn delete_team(
     // Delete permissions that were associated with this team's policies
     sqlx::query(
         r#"
-            DELETE FROM permissions 
-            WHERE id IN (
-                SELECT permission_id 
-                FROM policy_permissions 
-                WHERE policy_id IN (
-                    SELECT id FROM policies WHERE team_id = ?1
+            DELETE FROM permissions
+            WHERE tenant_id = ?1 AND id IN (
+                SELECT permission_id
+                FROM policy_permissions
+                WHERE tenant_id = ?1 AND policy_id IN (
+                    SELECT id FROM policies WHERE tenant_id = ?1 AND team_id = ?2
                 )
             )
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .execute(&mut *tx)
     .await?;
 
     // Delete policies for this team
-    sqlx::query("DELETE FROM policies WHERE team_id = ?1")
+    sqlx::query("DELETE FROM policies WHERE tenant_id = ?1 AND team_id = ?2")
+        .bind(tenant_id)
         .bind(team_id)
         .execute(&mut *tx)
         .await?;
 
     // Delete team_users
-    sqlx::query("DELETE FROM team_users WHERE team_id = ?1")
+    sqlx::query("DELETE FROM team_users WHERE tenant_id = ?1 AND team_id = ?2")
+        .bind(tenant_id)
         .bind(team_id)
         .execute(&mut *tx)
         .await?;
 
     // Finally delete the team
-    sqlx::query("DELETE FROM teams WHERE id = ?1")
+    sqlx::query("DELETE FROM teams WHERE tenant_id = ?1 AND id = ?2")
+        .bind(tenant_id)
         .bind(team_id)
         .execute(&mut *tx)
         .await?;
@@ -273,12 +299,14 @@ pub async fn delete_team(
 }
 
 pub async fn add_user(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path(team_id): Path<u32>,
     Json(request): Json<AddTeammateRequest>,
 ) -> ApiResult<Json<TeamUser>> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -288,9 +316,10 @@ pub async fn add_user(
     // Verify the user isn't already a member of the team
     if sqlx::query_as::<_, TeamUser>(
         r#"
-        SELECT * FROM team_users WHERE team_id = ?1 AND user_public_key = ?2
+        SELECT * FROM team_users WHERE tenant_id = ?1 AND team_id = ?2 AND user_public_key = ?3
         "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(new_user_public_key.to_hex())
     .fetch_optional(&mut *tx)
@@ -305,10 +334,11 @@ pub async fn add_user(
     // First, try to insert the user if they don't exist
     sqlx::query(
         r#"
-        INSERT OR IGNORE INTO users (public_key, created_at, updated_at)
-        VALUES (?1, datetime('now'), datetime('now'))
+        INSERT OR IGNORE INTO users (tenant_id, public_key, created_at, updated_at)
+        VALUES (?1, ?2, datetime('now'), datetime('now'))
         "#,
     )
+    .bind(tenant_id)
     .bind(new_user_public_key.to_hex())
     .execute(&mut *tx)
     .await?;
@@ -316,11 +346,12 @@ pub async fn add_user(
     // Then, insert the team_user relationship
     let team_user = sqlx::query_as::<_, TeamUser>(
         r#"
-        INSERT INTO team_users (team_id, user_public_key, role, created_at, updated_at)
-        VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
+        INSERT INTO team_users (tenant_id, team_id, user_public_key, role, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
         RETURNING *
         "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(new_user_public_key.to_hex())
     .bind(request.role)
@@ -333,11 +364,13 @@ pub async fn add_user(
 }
 
 pub async fn remove_user(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path((team_id, user_public_key)): Path<(u32, String)>,
 ) -> ApiResult<StatusCode> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -347,7 +380,8 @@ pub async fn remove_user(
     // Check if the user is deleting themselves
     if event.pubkey == removed_user_public_key {
         // At least one admin has to remain in the team
-        let remaining_admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_users WHERE team_id = ?1 AND user_public_key != ?2 AND role = 'admin'")
+        let remaining_admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM team_users WHERE tenant_id = ?1 AND team_id = ?2 AND user_public_key != ?3 AND role = 'admin'")
+            .bind(tenant_id)
             .bind(team_id)
             .bind(removed_user_public_key.to_hex())
             .fetch_one(&mut *tx)
@@ -361,7 +395,8 @@ pub async fn remove_user(
     }
 
     // Delete the team_user relationship
-    sqlx::query("DELETE FROM team_users WHERE team_id = ?1 AND user_public_key = ?2")
+    sqlx::query("DELETE FROM team_users WHERE tenant_id = ?1 AND team_id = ?2 AND user_public_key = ?3")
+        .bind(tenant_id)
         .bind(team_id)
         .bind(removed_user_public_key.to_hex())
         .execute(&mut *tx)
@@ -373,12 +408,14 @@ pub async fn remove_user(
 }
 
 pub async fn add_key(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path(team_id): Path<u32>,
     Json(request): Json<AddKeyRequest>,
 ) -> ApiResult<Json<PublicStoredKey>> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -395,11 +432,12 @@ pub async fn add_key(
     // Insert the key
     let key = sqlx::query_as::<_, StoredKey>(
         r#"
-         INSERT INTO stored_keys (team_id, name, public_key, secret_key, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
+         INSERT INTO stored_keys (tenant_id, team_id, name, public_key, secret_key, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))
          RETURNING *
          "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(request.name)
     .bind(keys.public_key().to_hex())
@@ -414,11 +452,13 @@ pub async fn add_key(
 }
 
 pub async fn remove_key(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path((team_id, pubkey)): Path<(u32, String)>,
 ) -> ApiResult<StatusCode> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -427,8 +467,9 @@ pub async fn remove_key(
 
     // First get the stored key ID
     let stored_key = sqlx::query_as::<_, StoredKey>(
-        "SELECT * FROM stored_keys WHERE team_id = ?1 AND public_key = ?2",
+        "SELECT * FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2 AND public_key = ?3",
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(removed_stored_key_public_key.to_hex())
     .fetch_one(&mut *tx)
@@ -436,20 +477,23 @@ pub async fn remove_key(
 
     // Delete all user_authorizations for this key using the correct stored_key_id
     sqlx::query(
-        "DELETE FROM user_authorizations WHERE authorization_id IN (SELECT id FROM authorizations WHERE stored_key_id = ?1)"
+        "DELETE FROM user_authorizations WHERE tenant_id = ?1 AND authorization_id IN (SELECT id FROM authorizations WHERE tenant_id = ?1 AND stored_key_id = ?2)"
     )
-    .bind(stored_key.id)  // Use stored_key.id instead of public_key
+    .bind(tenant_id)
+    .bind(stored_key.id)
     .execute(&mut *tx)
     .await?;
 
     // Delete all authorizations for this key using the correct stored_key_id
-    sqlx::query("DELETE FROM authorizations WHERE stored_key_id = ?1")
-        .bind(stored_key.id) // Use stored_key.id instead of public_key
+    sqlx::query("DELETE FROM authorizations WHERE tenant_id = ?1 AND stored_key_id = ?2")
+        .bind(tenant_id)
+        .bind(stored_key.id)
         .execute(&mut *tx)
         .await?;
 
     // Finally delete the key itself
-    sqlx::query("DELETE FROM stored_keys WHERE team_id = ?1 AND public_key = ?2")
+    sqlx::query("DELETE FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2 AND public_key = ?3")
+        .bind(tenant_id)
         .bind(team_id)
         .bind(removed_stored_key_public_key.to_hex())
         .execute(&mut *tx)
@@ -461,11 +505,13 @@ pub async fn remove_key(
 }
 
 pub async fn get_key(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path((team_id, pubkey)): Path<(u32, String)>,
 ) -> ApiResult<Json<KeyWithRelations>> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let mut tx = pool.begin().await?;
 
@@ -474,18 +520,20 @@ pub async fn get_key(
 
     let team = sqlx::query_as::<_, Team>(
         r#"
-            SELECT * FROM teams WHERE id = ?1
+            SELECT * FROM teams WHERE tenant_id = ?1 AND id = ?2
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .fetch_one(&mut *tx)
     .await?;
 
     let stored_key = sqlx::query_as::<_, StoredKey>(
         r#"
-            SELECT * FROM stored_keys WHERE team_id = ?1 AND public_key = ?2
+            SELECT * FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2 AND public_key = ?3
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(stored_key_public_key.to_hex())
     .fetch_one(&mut *tx)
@@ -496,9 +544,10 @@ pub async fn get_key(
         r#"
             SELECT *
             FROM authorizations
-            WHERE stored_key_id = ?1
+            WHERE tenant_id = ?1 AND stored_key_id = ?2
             "#,
     )
+    .bind(tenant_id)
     .bind(stored_key.id)
     .fetch_all(&mut *tx)
     .await?;
@@ -511,9 +560,10 @@ pub async fn get_key(
             r#"
                 SELECT *
                 FROM policies
-                WHERE id = ?1
+                WHERE tenant_id = ?1 AND id = ?2
                 "#,
         )
+        .bind(tenant_id)
         .bind(auth.policy_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -522,9 +572,10 @@ pub async fn get_key(
             r#"
                 SELECT user_public_key, created_at, updated_at
                 FROM user_authorizations
-                WHERE authorization_id = ?1
+                WHERE tenant_id = ?1 AND authorization_id = ?2
                 "#,
         )
+        .bind(tenant_id)
         .bind(auth.id)
         .fetch_all(&mut *tx)
         .await?;
@@ -548,12 +599,14 @@ pub async fn get_key(
 }
 
 pub async fn add_authorization(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path((team_id, pubkey)): Path<(u32, String)>,
     Json(request): Json<AddAuthorizationRequest>,
 ) -> ApiResult<Json<Authorization>> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
 
     let stored_key_public_key =
         PublicKey::from_hex(&pubkey).map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -562,9 +615,10 @@ pub async fn add_authorization(
 
     let stored_key = sqlx::query_as::<_, StoredKey>(
         r#"
-            SELECT * FROM stored_keys WHERE team_id = ?1 AND public_key = ?2
+            SELECT * FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2 AND public_key = ?3
             "#,
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(stored_key_public_key.to_hex())
     .fetch_one(&mut *tx)
@@ -572,7 +626,8 @@ pub async fn add_authorization(
 
     // Verify policy exists
     let policy_exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM policies WHERE id = ?1)")
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM policies WHERE tenant_id = ?1 AND id = ?2)")
+            .bind(tenant_id)
             .bind(request.policy_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -600,11 +655,12 @@ pub async fn add_authorization(
     // Create authorization
     let authorization = sqlx::query_as::<_, Authorization>(
             r#"
-            INSERT INTO authorizations (stored_key_id, policy_id, secret, bunker_public_key, bunker_secret, relays, max_uses, expires_at, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))
+            INSERT INTO authorizations (tenant_id, stored_key_id, policy_id, secret, bunker_public_key, bunker_secret, relays, max_uses, expires_at, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'))
             RETURNING *
             "#,
         )
+        .bind(tenant_id)
         .bind(stored_key.id)
         .bind(request.policy_id)
         .bind(secret)
@@ -622,12 +678,14 @@ pub async fn add_authorization(
 }
 
 pub async fn add_policy(
+    tenant: crate::api::tenant::TenantExtractor,
     State(pool): State<SqlitePool>,
     AuthEvent(event): AuthEvent,
     Path(team_id): Path<u32>,
     Json(request): Json<CreatePolicyRequest>,
 ) -> ApiResult<Json<PolicyWithPermissions>> {
-    verify_admin(&pool, &event.pubkey, team_id).await?;
+    let tenant_id = tenant.0.id;
+    verify_admin(&pool, &event.pubkey, team_id, tenant_id).await?;
     let mut tx = pool.begin().await?;
 
     // Create the permissions
@@ -643,8 +701,9 @@ pub async fn add_policy(
         }
 
         let permission = sqlx::query_as::<_, Permission>(
-            "INSERT INTO permissions (identifier, config, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now')) RETURNING *",
+            "INSERT INTO permissions (tenant_id, identifier, config, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now')) RETURNING *",
         )
+        .bind(tenant_id)
         .bind(permission.identifier)
         .bind(permission.config)
         .fetch_one(&mut *tx)
@@ -655,8 +714,9 @@ pub async fn add_policy(
 
     // Create the policy
     let policy = sqlx::query_as::<_, Policy>(
-        "INSERT INTO policies (team_id, name, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now')) RETURNING *",
+        "INSERT INTO policies (tenant_id, team_id, name, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now')) RETURNING *",
     )
+    .bind(tenant_id)
     .bind(team_id)
     .bind(request.name)
     .fetch_one(&mut *tx)
@@ -665,8 +725,9 @@ pub async fn add_policy(
     // create the policy permissions
     for permission in &permissions {
         sqlx::query(
-            "INSERT INTO policy_permissions (policy_id, permission_id, created_at, updated_at) VALUES (?1, ?2, datetime('now'), datetime('now'))",
+            "INSERT INTO policy_permissions (tenant_id, policy_id, permission_id, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
         )
+        .bind(tenant_id)
         .bind(policy.id)
         .bind(permission.id)
         .execute(&mut *tx)
@@ -685,8 +746,9 @@ pub async fn verify_admin<'a>(
     pool: &'a SqlitePool,
     pubkey: &'a PublicKey,
     team_id: u32,
+    tenant_id: i64,
 ) -> ApiResult<()> {
-    match User::is_team_admin(pool, pubkey, team_id).await {
+    match User::is_team_admin(pool, tenant_id, pubkey, team_id).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(ApiError::forbidden(
             "You are not authorized to access this team",

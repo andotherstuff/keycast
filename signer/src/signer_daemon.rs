@@ -16,6 +16,7 @@ struct AuthorizationHandler {
     user_keys: Keys,
     secret: String,
     authorization_id: u32,
+    tenant_id: i64,
     is_oauth: bool,
     pool: SqlitePool,
 }
@@ -48,10 +49,10 @@ impl UnifiedSigner {
         handlers.clear();
 
         // Load regular authorizations
-        let regular_auths = Authorization::all_ids(&self.pool).await?;
+        let regular_auths = Authorization::all_ids_for_all_tenants(&self.pool).await?;
         let regular_auth_count = regular_auths.len();
-        for auth_id in regular_auths {
-            let auth = Authorization::find(&self.pool, auth_id).await?;
+        for (tenant_id, auth_id) in regular_auths {
+            let auth = Authorization::find(&self.pool, tenant_id, auth_id).await?;
 
             // Decrypt bunker secret
             let decrypted_bunker_secret = self.key_manager.decrypt(&auth.bunker_secret).await?;
@@ -59,7 +60,7 @@ impl UnifiedSigner {
             let bunker_keys = Keys::new(bunker_secret_key);
 
             // Decrypt user secret
-            let stored_key = auth.stored_key(&self.pool).await?;
+            let stored_key = auth.stored_key(&self.pool, tenant_id).await?;
             let decrypted_user_secret = self.key_manager.decrypt(&stored_key.secret_key).await?;
             let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
             let user_keys = Keys::new(user_secret_key);
@@ -67,8 +68,9 @@ impl UnifiedSigner {
             let bunker_pubkey = bunker_keys.public_key().to_hex();
 
             tracing::info!(
-                "Loaded regular authorization {} with bunker pubkey: {}",
+                "Loaded regular authorization {} (tenant {}) with bunker pubkey: {}",
                 auth_id,
+                tenant_id,
                 bunker_pubkey
             );
 
@@ -77,16 +79,17 @@ impl UnifiedSigner {
                 user_keys,
                 secret: auth.secret.clone(),
                 authorization_id: auth_id,
+                tenant_id,
                 is_oauth: false,
                 pool: self.pool.clone(),
             });
         }
 
         // Load OAuth authorizations
-        let oauth_auths = OAuthAuthorization::all_ids(&self.pool).await?;
+        let oauth_auths = OAuthAuthorization::all_ids_for_all_tenants(&self.pool).await?;
         let oauth_auth_count = oauth_auths.len();
-        for auth_id in oauth_auths {
-            let auth = OAuthAuthorization::find(&self.pool, auth_id).await?;
+        for (tenant_id, auth_id) in oauth_auths {
+            let auth = OAuthAuthorization::find(&self.pool, tenant_id, auth_id).await?;
 
             // Decrypt user secret (used for both bunker and signing in OAuth)
             let decrypted_user_secret = self.key_manager.decrypt(&auth.bunker_secret).await?;
@@ -96,8 +99,9 @@ impl UnifiedSigner {
             let bunker_pubkey = user_keys.public_key().to_hex();
 
             tracing::info!(
-                "Loaded OAuth authorization {} with bunker pubkey: {}",
+                "Loaded OAuth authorization {} (tenant {}) with bunker pubkey: {}",
                 auth_id,
+                tenant_id,
                 bunker_pubkey
             );
 
@@ -106,6 +110,7 @@ impl UnifiedSigner {
                 user_keys,
                 secret: auth.secret.clone(),
                 authorization_id: auth_id,
+                tenant_id,
                 is_oauth: true,
                 pool: self.pool.clone(),
             });
@@ -219,8 +224,8 @@ impl UnifiedSigner {
         };
 
         // Load all authorization IDs from database
-        let mut regular_auths = Authorization::all_ids(pool).await?;
-        let mut oauth_auths = OAuthAuthorization::all_ids(pool).await?;
+        let mut regular_auths = Authorization::all_ids_for_all_tenants(pool).await?;
+        let mut oauth_auths = OAuthAuthorization::all_ids_for_all_tenants(pool).await?;
 
         // OPTIMIZATION: Only check the LAST 5 authorization IDs since new ones are at the end
         // This avoids decrypting all 67 authorizations with GCP KMS just to find 1 new one
@@ -239,8 +244,8 @@ impl UnifiedSigner {
         let mut added_count = 0;
 
         // Check for NEW regular authorizations
-        for auth_id in regular_auths {
-            let auth = Authorization::find(pool, auth_id).await?;
+        for (tenant_id, auth_id) in regular_auths {
+            let auth = Authorization::find(pool, tenant_id, auth_id).await?;
 
             // Decrypt bunker secret to get pubkey
             let decrypted_bunker_secret = key_manager.decrypt(&auth.bunker_secret).await?;
@@ -251,7 +256,7 @@ impl UnifiedSigner {
             // Only load if not already loaded
             if !loaded_pubkeys.contains(&bunker_pubkey) {
                 // Decrypt user secret
-                let stored_key = auth.stored_key(pool).await?;
+                let stored_key = auth.stored_key(pool, tenant_id).await?;
                 let decrypted_user_secret = key_manager.decrypt(&stored_key.secret_key).await?;
                 let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
                 let user_keys = Keys::new(user_secret_key);
@@ -261,6 +266,7 @@ impl UnifiedSigner {
                     user_keys,
                     secret: auth.secret.clone(),
                     authorization_id: auth_id,
+                    tenant_id,
                     is_oauth: false,
                     pool: pool.clone(),
                 };
@@ -274,16 +280,17 @@ impl UnifiedSigner {
                 added_count += 1;
 
                 tracing::info!(
-                    "Added NEW regular authorization {} with bunker pubkey: {}",
+                    "Added NEW regular authorization {} (tenant {}) with bunker pubkey: {}",
                     auth_id,
+                    tenant_id,
                     bunker_pubkey
                 );
             }
         }
 
         // Check for NEW OAuth authorizations
-        for auth_id in oauth_auths {
-            let auth = OAuthAuthorization::find(pool, auth_id).await?;
+        for (tenant_id, auth_id) in oauth_auths {
+            let auth = OAuthAuthorization::find(pool, tenant_id, auth_id).await?;
 
             // Decrypt user secret to get pubkey
             let decrypted_user_secret = key_manager.decrypt(&auth.bunker_secret).await?;
@@ -298,6 +305,7 @@ impl UnifiedSigner {
                     user_keys,
                     secret: auth.secret.clone(),
                     authorization_id: auth_id,
+                    tenant_id,
                     is_oauth: true,
                     pool: pool.clone(),
                 };
@@ -311,8 +319,9 @@ impl UnifiedSigner {
                 added_count += 1;
 
                 tracing::info!(
-                    "Added NEW OAuth authorization {} with bunker pubkey: {}",
+                    "Added NEW OAuth authorization {} (tenant {}) with bunker pubkey: {}",
                     auth_id,
+                    tenant_id,
                     bunker_pubkey
                 );
             }
@@ -643,8 +652,9 @@ impl AuthorizationHandler {
             let oauth_auth: (String, Option<i64>, Option<String>, String) = sqlx::query_as(
                 "SELECT user_public_key, application_id, client_public_key, secret
                  FROM oauth_authorizations
-                 WHERE id = ?1"
+                 WHERE tenant_id = ?1 AND id = ?2"
             )
+            .bind(self.tenant_id)
             .bind(self.authorization_id as i64)
             .fetch_one(&self.pool)
             .await?;
@@ -652,8 +662,9 @@ impl AuthorizationHandler {
         } else {
             // For regular authorizations, look up via authorizations table
             let auth: (i64, String) = sqlx::query_as(
-                "SELECT stored_key_id, secret FROM authorizations WHERE id = ?1"
+                "SELECT stored_key_id, secret FROM authorizations WHERE tenant_id = ?1 AND id = ?2"
             )
+            .bind(self.tenant_id)
             .bind(self.authorization_id as i64)
             .fetch_one(&self.pool)
             .await?;
@@ -663,8 +674,9 @@ impl AuthorizationHandler {
 
             // Get public_key from stored_keys
             let stored_key: (String,) = sqlx::query_as(
-                "SELECT public_key FROM stored_keys WHERE id = ?1"
+                "SELECT public_key FROM stored_keys WHERE tenant_id = ?1 AND id = ?2"
             )
+            .bind(self.tenant_id)
             .bind(stored_key_id)
             .fetch_one(&self.pool)
             .await?;
@@ -682,9 +694,10 @@ impl AuthorizationHandler {
         // Insert signing activity
         sqlx::query(
             "INSERT INTO signing_activity
-             (user_public_key, application_id, bunker_secret, event_kind, event_content, event_id, client_public_key, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)"
+             (tenant_id, user_public_key, application_id, bunker_secret, event_kind, event_content, event_id, client_public_key, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)"
         )
+        .bind(self.tenant_id)
         .bind(&user_pubkey)
         .bind(application_id)
         .bind(&bunker_secret)
@@ -695,7 +708,7 @@ impl AuthorizationHandler {
         .execute(&self.pool)
         .await?;
 
-        tracing::debug!("Logged signing activity for user {} kind {}", user_pubkey, event_kind);
+        tracing::debug!("Logged signing activity for tenant {} user {} kind {}", self.tenant_id, user_pubkey, event_kind);
 
         Ok(())
     }

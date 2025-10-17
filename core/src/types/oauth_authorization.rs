@@ -1,7 +1,6 @@
 // ABOUTME: OAuth authorization type for handling OAuth-based remote signing
 // ABOUTME: Unlike regular authorizations, OAuth uses the user's personal key for both NIP-46 encryption and event signing
 
-use crate::encryption::KeyManagerError;
 use crate::traits::AuthorizationValidations;
 use crate::types::authorization::{AuthorizationError, Relays};
 use chrono::DateTime;
@@ -35,12 +34,13 @@ pub struct OAuthAuthorization {
 }
 
 impl OAuthAuthorization {
-    pub async fn find(pool: &SqlitePool, id: u32) -> Result<Self, AuthorizationError> {
+    pub async fn find(pool: &SqlitePool, tenant_id: i64, id: u32) -> Result<Self, AuthorizationError> {
         let authorization = sqlx::query_as::<_, OAuthAuthorization>(
             r#"
-            SELECT * FROM oauth_authorizations WHERE id = ?
+            SELECT * FROM oauth_authorizations WHERE tenant_id = ?1 AND id = ?2
             "#,
         )
+        .bind(tenant_id)
         .bind(id)
         .fetch_one(pool)
         .await?;
@@ -57,13 +57,25 @@ impl OAuthAuthorization {
         .await?;
         Ok(authorizations)
     }
+
+    pub async fn all_ids_for_all_tenants(pool: &SqlitePool) -> Result<Vec<(i64, u32)>, AuthorizationError> {
+        let authorizations = sqlx::query_as::<_, (i64, u32)>(
+            r#"
+            SELECT tenant_id, id FROM oauth_authorizations
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(authorizations)
+    }
 }
 
 impl AuthorizationValidations for OAuthAuthorization {
     fn validate_policy(
         &self,
-        pool: &SqlitePool,
-        pubkey: &PublicKey,
+        _pool: &SqlitePool,
+        _tenant_id: i64,
+        _pubkey: &PublicKey,
         request: &Request,
     ) -> Result<bool, AuthorizationError> {
         // For OAuth, we allow all operations since the user authorized the app

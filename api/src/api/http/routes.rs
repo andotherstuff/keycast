@@ -164,6 +164,7 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
 /// NIP-05 discovery endpoint for nostr-login integration
 /// This should be mounted at root level in main.rs, not under /api
 pub async fn nostr_discovery_public(
+    tenant: crate::api::tenant::TenantExtractor,
     axum::extract::State(pool): axum::extract::State<SqlitePool>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl axum::response::IntoResponse {
@@ -171,13 +172,16 @@ pub async fn nostr_discovery_public(
     use axum::body::Body;
     use axum::response::Response;
 
+    let tenant_id = tenant.0.id;
+
     // Check if "name" query parameter is provided
     if let Some(name) = params.get("name") {
-        // Look up user by username
+        // Look up user by username in this tenant
         let result: Option<(String,)> = sqlx::query_as(
-            "SELECT public_key FROM users WHERE username = ?1"
+            "SELECT public_key FROM users WHERE username = ?1 AND tenant_id = ?2"
         )
         .bind(name)
+        .bind(tenant_id)
         .fetch_optional(&pool)
         .await
         .ok()

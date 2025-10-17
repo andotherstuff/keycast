@@ -99,6 +99,7 @@ pub async fn authorize_get(
 /// POST /oauth/authorize
 /// User approves authorization, creates code and redirects back to app OR returns code directly
 pub async fn authorize_post(
+    tenant: crate::api::tenant::TenantExtractor,
     State(auth_state): State<super::routes::AuthState>,
     headers: axum::http::HeaderMap,
     Json(req): Json<ApproveRequest>,
@@ -110,6 +111,8 @@ pub async fn authorize_post(
         ))
         .into_response());
     }
+
+    let tenant_id = tenant.0.id;
 
     // Extract user public key from JWT token in Authorization header
     let user_public_key = super::auth::extract_user_from_token(&headers)
@@ -127,7 +130,8 @@ pub async fn authorize_post(
 
     // Get or create application
     let app_id: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM oauth_applications WHERE client_id = ?1")
+        sqlx::query_scalar("SELECT id FROM oauth_applications WHERE tenant_id = ?1 AND client_id = ?2")
+            .bind(tenant_id)
             .bind(&req.client_id)
             .fetch_optional(&auth_state.state.db)
             .await?;
@@ -137,9 +141,10 @@ pub async fn authorize_post(
     } else {
         // Create test application
         sqlx::query_scalar(
-            "INSERT INTO oauth_applications (client_id, client_secret, name, redirect_uris, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id"
+            "INSERT INTO oauth_applications (tenant_id, client_id, client_secret, name, redirect_uris, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id"
         )
+        .bind(tenant_id)
         .bind(&req.client_id)
         .bind("test_secret")
         .bind(&req.client_id)
@@ -152,9 +157,10 @@ pub async fn authorize_post(
 
     // Store authorization code
     sqlx::query(
-        "INSERT INTO oauth_codes (code, user_public_key, application_id, redirect_uri, scope, expires_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        "INSERT INTO oauth_codes (tenant_id, code, user_public_key, application_id, redirect_uri, scope, expires_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
     )
+    .bind(tenant_id)
     .bind(&code)
     .bind(&user_public_key)
     .bind(app_id)
@@ -177,16 +183,19 @@ pub async fn authorize_post(
 /// POST /oauth/token
 /// Exchange authorization code for bunker URL
 pub async fn token(
+    tenant: crate::api::tenant::TenantExtractor,
     State(auth_state): State<super::routes::AuthState>,
     Json(req): Json<TokenRequest>,
 ) -> Result<Json<TokenResponse>, OAuthError> {
+    let tenant_id = tenant.0.id;
     let pool = &auth_state.state.db;
 
     // Fetch and validate authorization code
     let auth_code: Option<(String, i64, String, String)> = sqlx::query_as(
         "SELECT user_public_key, application_id, redirect_uri, scope FROM oauth_codes
-         WHERE code = ?1 AND expires_at > ?2"
+         WHERE tenant_id = ?1 AND code = ?2 AND expires_at > ?3"
     )
+    .bind(tenant_id)
     .bind(&req.code)
     .bind(Utc::now())
     .fetch_optional(pool)
@@ -203,7 +212,8 @@ pub async fn token(
     }
 
     // Delete the authorization code (one-time use)
-    sqlx::query("DELETE FROM oauth_codes WHERE code = ?1")
+    sqlx::query("DELETE FROM oauth_codes WHERE tenant_id = ?1 AND code = ?2")
+        .bind(tenant_id)
         .bind(&req.code)
         .execute(pool)
         .await?;
@@ -211,8 +221,9 @@ pub async fn token(
     // Look up user's personal Nostr key from personal_keys table
     // We get the encrypted key to use as the bunker secret (for NIP-46 decryption + signing)
     let encrypted_user_key: Vec<u8> = sqlx::query_scalar(
-        "SELECT encrypted_secret_key FROM personal_keys WHERE user_public_key = ?1"
+        "SELECT encrypted_secret_key FROM personal_keys WHERE tenant_id = ?1 AND user_public_key = ?2"
     )
+    .bind(tenant_id)
     .bind(&user_public_key)
     .fetch_one(pool)
     .await
@@ -235,9 +246,10 @@ pub async fn token(
         .map_err(|e| OAuthError::InvalidRequest(format!("Failed to serialize relays: {}", e)))?;
 
     sqlx::query(
-        "INSERT INTO oauth_authorizations (user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+        "INSERT INTO oauth_authorizations (tenant_id, user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
     )
+    .bind(tenant_id)
     .bind(&user_public_key)
     .bind(application_id)
     .bind(bunker_public_key.to_hex())
@@ -512,10 +524,13 @@ pub async fn connect_get(
 /// POST /oauth/connect
 /// User approves/denies the nostr-login connection
 pub async fn connect_post(
+    tenant: crate::api::tenant::TenantExtractor,
     State(auth_state): State<super::routes::AuthState>,
     headers: axum::http::HeaderMap,
     Form(form): Form<ConnectApprovalForm>,
 ) -> Result<Response, OAuthError> {
+    let tenant_id = tenant.0.id;
+
     tracing::info!(
         "nostr-login connect approval - client: {}..., approved: {}",
         &form.client_pubkey[..8],
@@ -555,8 +570,9 @@ pub async fn connect_post(
 
     // Get user's encrypted key
     let encrypted_user_key: Vec<u8> = sqlx::query_scalar(
-        "SELECT encrypted_secret_key FROM personal_keys WHERE user_public_key = ?1"
+        "SELECT encrypted_secret_key FROM personal_keys WHERE tenant_id = ?1 AND user_public_key = ?2"
     )
+    .bind(tenant_id)
     .bind(&user_public_key)
     .fetch_one(&auth_state.state.db)
     .await?;
@@ -569,17 +585,19 @@ pub async fn connect_post(
     let app_name = format!("nostr-login-{}", &form.client_pubkey[..12]);
 
     let app_id: i64 = match sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM oauth_applications WHERE client_id = ?1"
+        "SELECT id FROM oauth_applications WHERE tenant_id = ?1 AND client_id = ?2"
     )
+    .bind(tenant_id)
     .bind(&form.client_pubkey)
     .fetch_optional(&auth_state.state.db)
     .await? {
         Some(id) => id,
         None => {
             sqlx::query_scalar(
-                "INSERT INTO oauth_applications (client_id, client_secret, name, redirect_uris, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, '[]', ?4, ?5) RETURNING id"
+                "INSERT INTO oauth_applications (tenant_id, client_id, client_secret, name, redirect_uris, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, '[]', ?5, ?6) RETURNING id"
             )
+            .bind(tenant_id)
             .bind(&form.client_pubkey)
             .bind("") // No client secret for nostr-login
             .bind(&app_name)
@@ -596,9 +614,10 @@ pub async fn connect_post(
 
     sqlx::query(
         "INSERT INTO oauth_authorizations
-         (user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, client_public_key, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+         (tenant_id, user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, client_public_key, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
     )
+    .bind(tenant_id)
     .bind(&user_public_key)
     .bind(app_id)
     .bind(bunker_public_key.to_hex())

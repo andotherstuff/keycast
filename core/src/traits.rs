@@ -11,6 +11,7 @@ pub trait AuthorizationValidations {
     fn validate_policy(
         &self,
         pool: &SqlitePool,
+        tenant_id: i64,
         pubkey: &PublicKey,
         request: &Request,
     ) -> Result<bool, AuthorizationError>;

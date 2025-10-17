@@ -72,10 +72,12 @@ pub struct KeyWithRelations {
 impl Team {
     pub async fn find_with_relations(
         pool: &SqlitePool,
+        tenant_id: i64,
         team_id: u32,
     ) -> Result<TeamWithRelations, TeamError> {
         // Get team
-        let team = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE id = ?1")
+        let team = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE tenant_id = ?1 AND id = ?2")
+            .bind(tenant_id)
             .bind(team_id)
             .fetch_one(pool)
             .await?;
@@ -83,18 +85,20 @@ impl Team {
         // Get team_users for this team
         let team_users = sqlx::query_as::<_, TeamUser>(
             r#"
-            SELECT tu.* 
+            SELECT tu.*
             FROM team_users tu
-            WHERE tu.team_id = ?1
+            WHERE tu.tenant_id = ?1 AND tu.team_id = ?2
             "#,
         )
+        .bind(tenant_id)
         .bind(team_id)
         .fetch_all(pool)
         .await?;
 
         // Get stored keys for this team
         let stored_keys =
-            sqlx::query_as::<_, StoredKey>("SELECT * FROM stored_keys WHERE team_id = ?1")
+            sqlx::query_as::<_, StoredKey>("SELECT * FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2")
+                .bind(tenant_id)
                 .bind(team_id)
                 .fetch_all(pool)
                 .await?;
@@ -105,7 +109,7 @@ impl Team {
             .collect::<Vec<_>>();
 
         // Get policies for this team
-        let policies = Team::get_policies_with_permissions(pool, team_id).await?;
+        let policies = Team::get_policies_with_permissions(pool, tenant_id, team_id).await?;
 
         Ok(TeamWithRelations {
             team,
@@ -117,10 +121,12 @@ impl Team {
 
     pub async fn get_policies_with_permissions(
         pool: &SqlitePool,
+        tenant_id: i64,
         team_id: u32,
     ) -> Result<Vec<PolicyWithPermissions>, TeamError> {
         // First fetch policies
-        let policies = sqlx::query_as::<_, Policy>("SELECT * FROM policies WHERE team_id = ?1")
+        let policies = sqlx::query_as::<_, Policy>("SELECT * FROM policies WHERE tenant_id = ?1 AND team_id = ?2")
+            .bind(tenant_id)
             .bind(team_id)
             .fetch_all(pool)
             .await?;
@@ -129,10 +135,11 @@ impl Team {
         let mut policies_with_permissions = Vec::new();
         for policy in policies {
             let permissions = sqlx::query_as::<_, Permission>(
-                "SELECT p.* FROM permissions p 
-                 JOIN policy_permissions pp ON pp.permission_id = p.id 
-                 WHERE pp.policy_id = ?1",
+                "SELECT p.* FROM permissions p
+                 JOIN policy_permissions pp ON pp.permission_id = p.id
+                 WHERE pp.tenant_id = ?1 AND pp.policy_id = ?2",
             )
+            .bind(tenant_id)
             .bind(policy.id)
             .fetch_all(pool)
             .await?;

@@ -50,7 +50,26 @@ ALTER TABLE personal_keys ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1 REFERE
 CREATE INDEX idx_personal_keys_tenant_id ON personal_keys(tenant_id);
 
 -- OAuth applications table (client_id must be unique per tenant)
-ALTER TABLE oauth_applications ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id);
+-- NOTE: Must recreate table to remove column-level UNIQUE constraint on client_id
+ALTER TABLE oauth_applications RENAME TO oauth_applications_old;
+
+CREATE TABLE oauth_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT NOT NULL,  -- Removed UNIQUE constraint (will be tenant-scoped below)
+    client_secret TEXT NOT NULL,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    tenant_id INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id)
+);
+
+INSERT INTO oauth_applications (id, client_id, client_secret, name, redirect_uris, created_at, updated_at, tenant_id)
+SELECT id, client_id, client_secret, name, redirect_uris, created_at, updated_at, 1
+FROM oauth_applications_old;
+
+DROP TABLE oauth_applications_old;
+
 CREATE INDEX idx_oauth_applications_tenant_id ON oauth_applications(tenant_id);
 
 -- OAuth codes table
@@ -76,8 +95,7 @@ CREATE UNIQUE INDEX idx_users_email_tenant ON users(tenant_id, email) WHERE emai
 DROP INDEX IF EXISTS idx_users_username;
 CREATE UNIQUE INDEX idx_users_username_tenant ON users(tenant_id, username) WHERE username IS NOT NULL;
 
--- OAuth applications: client_id must be unique per tenant
-DROP INDEX IF EXISTS oauth_applications_client_id_key;
+-- OAuth applications: client_id must be unique per tenant (table was recreated above)
 CREATE UNIQUE INDEX idx_oauth_applications_client_id_tenant ON oauth_applications(tenant_id, client_id);
 
 -- Authorizations: bunker_public_key unique per tenant
