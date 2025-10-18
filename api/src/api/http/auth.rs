@@ -46,6 +46,8 @@ struct Claims {
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nsec: Option<String>,  // Optional: user can provide their own nsec/hex secret key
 }
 
 #[derive(Debug, Serialize)]
@@ -140,6 +142,7 @@ pub enum AuthError {
     MissingToken,
     InvalidToken,
     EmailSendFailed(String),
+    DuplicateKey,  // Nostr pubkey already registered (BYOK case)
 }
 
 impl IntoResponse for AuthError {
@@ -209,6 +212,10 @@ impl IntoResponse for AuthError {
                     "Unable to send email. Please try again in a few minutes.".to_string(),
                 )
             },
+            AuthError::DuplicateKey => (
+                StatusCode::CONFLICT,
+                "This Nostr key is already registered. Please log in instead or use a different key.".to_string(),
+            ),
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -285,10 +292,34 @@ pub async fn register(
     let verification_token = generate_secure_token();
     let verification_expires = Utc::now() + Duration::hours(EMAIL_VERIFICATION_EXPIRY_HOURS);
 
-    // Generate new Nostr keypair for this user
-    let keys = Keys::generate();
+    // Use provided nsec or generate new Nostr keypair
+    let keys = if let Some(ref nsec_str) = req.nsec {
+        tracing::info!("User provided their own key (BYOK) for email: {}", req.email);
+        // Try parsing as bech32 nsec first, then as hex
+        Keys::parse(nsec_str)
+            .map_err(|e| AuthError::Internal(format!("Invalid nsec or secret key: {}. Please provide a valid nsec (bech32) or hex secret key.", e)))?
+    } else {
+        tracing::info!("Auto-generating new keypair for email: {}", req.email);
+        Keys::generate()
+    };
+
     let public_key = keys.public_key();
     let secret_key = keys.secret_key();
+
+    // Check if this public key is already registered in this tenant (for BYOK case)
+    if req.nsec.is_some() {
+        let existing_pubkey: Option<(String,)> = sqlx::query_as(
+            "SELECT public_key FROM users WHERE public_key = ?1 AND tenant_id = ?2"
+        )
+        .bind(public_key.to_hex())
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await?;
+
+        if existing_pubkey.is_some() {
+            return Err(AuthError::DuplicateKey);
+        }
+    }
 
     // Encrypt the secret key
     let encrypted_secret = key_manager
