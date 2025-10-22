@@ -13,9 +13,8 @@ use std::path::PathBuf;
 use std::process;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-// Import the unified signer from signer_daemon module
-mod signer_daemon;
-use signer_daemon::UnifiedSigner;
+// Import the unified signer from library
+use keycast_signer::UnifiedSigner;
 
 // Health check endpoint handler
 async fn health() -> &'static str {
@@ -116,11 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🤙 Unified signer daemon ready, listening for NIP-46 requests");
 
-    // Get port from environment or use default
+    // Get port from environment or use default (3046 for NIP-46 signer)
     let port = env::var("PORT")
-        .unwrap_or_else(|_| "8080".to_string())
+        .unwrap_or_else(|_| "3046".to_string())
         .parse::<u16>()
-        .unwrap_or(8080);
+        .unwrap_or(3046);
 
     // Build HTTP router for health checks
     let app = Router::new().route("/health", get(health));

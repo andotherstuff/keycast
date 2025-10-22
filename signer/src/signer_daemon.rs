@@ -1,7 +1,9 @@
 // ABOUTME: Unified signer daemon that handles multiple NIP-46 bunker connections in a single process
 // ABOUTME: Listens for NIP-46 requests and routes them to the appropriate authorization/key
 
+use async_trait::async_trait;
 use keycast_core::encryption::KeyManager;
+use keycast_core::signing_handler::SigningHandler;
 use keycast_core::types::authorization::Authorization;
 use keycast_core::types::oauth_authorization::OAuthAuthorization;
 use nostr_sdk::prelude::*;
@@ -11,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
-struct AuthorizationHandler {
+pub struct AuthorizationHandler {
     bunker_keys: Keys,
     user_keys: Keys,
     secret: String,
@@ -191,14 +193,24 @@ impl UnifiedSigner {
 
         // Handle incoming events
         let client = self.client.clone();
+        let pool = self.pool.clone();
+        let key_manager = self.key_manager.clone();
         self.client
             .handle_notifications(|notification| async {
                 if let RelayPoolNotification::Event { event, .. } = notification {
                     if event.kind == Kind::NostrConnect {
                         let handlers_lock = handlers.clone();
                         let client_clone = client.clone();
+                        let pool_clone = pool.clone();
+                        let key_manager_clone = key_manager.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = Self::handle_nip46_request(handlers_lock, client_clone, event).await {
+                            if let Err(e) = Self::handle_nip46_request(
+                                handlers_lock,
+                                client_clone,
+                                event,
+                                &pool_clone,
+                                &key_manager_clone
+                            ).await {
                                 tracing::error!("Error handling NIP-46 request: {}", e);
                             }
                         });
@@ -344,6 +356,8 @@ impl UnifiedSigner {
         handlers: Arc<RwLock<HashMap<String, AuthorizationHandler>>>,
         client: Client,
         event: Box<Event>,
+        pool: &SqlitePool,
+        key_manager: &Arc<Box<dyn KeyManager>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // SINGLE SUBSCRIPTION ARCHITECTURE:
         // We receive ALL kind 24133 events from the relay (no pubkey filter)
@@ -370,9 +384,56 @@ impl UnifiedSigner {
         let handler = match handler {
             Some(h) => h,
             None => {
-                // Not our bunker, silently ignore (this is normal with single subscription)
-                tracing::debug!("Ignoring NIP-46 request for unmanaged bunker: {}", bunker_pubkey);
-                return Ok(());
+                // Not in cache - check database (on-demand loading for new users)
+                tracing::debug!("Bunker {} not in cache, checking database", bunker_pubkey);
+
+                // Query database for OAuth authorization with this bunker pubkey
+                let auth_opt = sqlx::query_as::<_, OAuthAuthorization>(
+                    r#"
+                    SELECT * FROM oauth_authorizations
+                    WHERE bunker_public_key = ?
+                    "#
+                )
+                .bind(bunker_pubkey)
+                .fetch_optional(pool)
+                .await?;
+
+                match auth_opt {
+                    Some(auth) => {
+                        // Found in database - load it now
+                        tracing::info!("Loading OAuth authorization {} on-demand for bunker {}",
+                            auth.id, bunker_pubkey);
+
+                        // Decrypt user secret (stored in bunker_secret for OAuth)
+                        let decrypted_user_secret = key_manager.decrypt(&auth.bunker_secret).await?;
+                        let user_secret_key = SecretKey::from_slice(&decrypted_user_secret)?;
+                        let user_keys = Keys::new(user_secret_key.clone());
+
+                        // For OAuth, bunker keys and user keys are the same
+                        let handler = AuthorizationHandler {
+                            bunker_keys: user_keys.clone(),
+                            user_keys,
+                            secret: auth.secret.clone(),
+                            authorization_id: auth.id,
+                            tenant_id: 1, // TODO: get from auth when schema supports it
+                            is_oauth: true,
+                            pool: pool.clone(),
+                        };
+
+                        // Cache it for future requests
+                        {
+                            let mut h = handlers.write().await;
+                            h.insert(bunker_pubkey.to_string(), handler.clone());
+                        }
+
+                        handler
+                    },
+                    None => {
+                        // Not in database either - not our bunker
+                        tracing::debug!("Bunker {} not found in database, ignoring", bunker_pubkey);
+                        return Ok(());
+                    }
+                }
             }
         };
 
@@ -576,6 +637,46 @@ impl UnifiedSigner {
     }
 }
 
+#[async_trait]
+impl SigningHandler for AuthorizationHandler {
+    async fn sign_event_direct(
+        &self,
+        unsigned_event: UnsignedEvent,
+    ) -> Result<Event, Box<dyn std::error::Error + Send + Sync>> {
+        // Extract event details for logging
+        let kind = unsigned_event.kind.as_u16();
+        let content = unsigned_event.content.clone();
+
+        tracing::info!(
+            "Direct signing event kind {} for authorization {}",
+            kind,
+            self.authorization_id
+        );
+
+        // Sign the event with user keys (consumes unsigned_event)
+        let signed_event = unsigned_event.sign(&self.user_keys).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        tracing::debug!("Successfully signed event: {}", signed_event.id);
+
+        // Log signing activity to database
+        if let Err(e) = self.log_signing_activity(kind, &content, &signed_event.id.to_hex()).await {
+            tracing::error!("Failed to log signing activity: {}", e);
+            // Don't fail the signing request if activity logging fails
+        }
+
+        Ok(signed_event)
+    }
+
+    fn authorization_id(&self) -> i64 {
+        self.authorization_id as i64
+    }
+
+    fn user_public_key(&self) -> String {
+        self.user_keys.public_key().to_hex()
+    }
+}
+
 impl AuthorizationHandler {
     async fn handle_sign_event(&self, request: &serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         // Parse the unsigned event from params
@@ -711,6 +812,221 @@ impl AuthorizationHandler {
         tracing::debug!("Logged signing activity for tenant {} user {} kind {}", self.tenant_id, user_pubkey, event_kind);
 
         Ok(())
+    }
+}
+
+impl UnifiedSigner {
+    /// Get authorization handler for a user's keycast-login session
+    /// Returns cached handler if available (fast path), otherwise None
+    pub async fn get_handler_for_user(
+        &self,
+        user_pubkey: &str,
+    ) -> Result<Option<AuthorizationHandler>, Box<dyn std::error::Error>> {
+        // Find user's keycast-login OAuth authorization
+        let bunker_pubkey: Option<String> = sqlx::query_scalar(
+            "SELECT bunker_public_key FROM oauth_authorizations
+             WHERE user_public_key = ?1
+             AND application_id = (
+                 SELECT id FROM oauth_applications WHERE client_id = 'keycast-login'
+             )
+             AND revoked_at IS NULL
+             ORDER BY created_at DESC
+             LIMIT 1"
+        )
+        .bind(user_pubkey)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(bunker_key) = bunker_pubkey {
+            let handlers = self.handlers.read().await;
+            Ok(handlers.get(&bunker_key).cloned())
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get shared reference to handlers HashMap for HTTP signing
+    /// Converts concrete AuthorizationHandler to trait objects for API compatibility
+    /// Used by unified binary to share handlers between API and Signer
+    pub async fn handlers_as_trait_objects(&self) -> Arc<RwLock<HashMap<String, Arc<dyn SigningHandler>>>> {
+        let handlers_read = self.handlers.read().await;
+        let mut trait_map: HashMap<String, Arc<dyn SigningHandler>> = HashMap::new();
+
+        for (key, handler) in handlers_read.iter() {
+            // Clone the handler and wrap in Arc as trait object
+            trait_map.insert(key.clone(), Arc::new(handler.clone()) as Arc<dyn SigningHandler>);
+        }
+
+        Arc::new(RwLock::new(trait_map))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create test database with minimal schema
+    async fn create_test_db() -> SqlitePool {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+
+        // Create minimal schema needed for tests
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS oauth_applications (
+                id INTEGER PRIMARY KEY,
+                client_id TEXT NOT NULL UNIQUE,
+                name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_authorizations (
+                id INTEGER PRIMARY KEY,
+                user_public_key TEXT NOT NULL,
+                application_id INTEGER,
+                bunker_public_key TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                revoked_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (application_id) REFERENCES oauth_applications(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS signing_activity (
+                id INTEGER PRIMARY KEY,
+                tenant_id INTEGER NOT NULL DEFAULT 1,
+                user_public_key TEXT NOT NULL,
+                application_id INTEGER,
+                bunker_secret TEXT NOT NULL,
+                event_kind INTEGER NOT NULL,
+                event_content TEXT,
+                event_id TEXT,
+                client_public_key TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            "#
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        pool
+    }
+
+    /// Helper to create test keys
+    fn create_test_keys() -> Keys {
+        Keys::generate()
+    }
+
+    /// Helper to create test authorization handler
+    fn create_test_handler(pool: SqlitePool) -> AuthorizationHandler {
+        let user_keys = create_test_keys();
+        let bunker_keys = create_test_keys();
+
+        AuthorizationHandler {
+            bunker_keys,
+            user_keys,
+            secret: "test_secret".to_string(),
+            authorization_id: 1,
+            tenant_id: 1,
+            is_oauth: true,
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_event_direct_creates_valid_signature() {
+        // Arrange
+        let pool = create_test_db().await;
+        let handler = create_test_handler(pool);
+
+        let unsigned_event = UnsignedEvent::new(
+            handler.user_keys.public_key(),
+            Timestamp::now(),
+            Kind::from(1),
+            vec![],  // tags first
+            "Test message for direct signing",  // content last
+        );
+
+        // Act
+        let signed_event = handler.sign_event_direct(unsigned_event)
+            .await
+            .expect("Signing should succeed");
+
+        // Assert
+        assert_eq!(signed_event.kind, Kind::from(1));
+        assert_eq!(signed_event.content, "Test message for direct signing");
+        assert_eq!(signed_event.pubkey, handler.user_keys.public_key());
+        assert!(signed_event.verify().is_ok(), "Signature should be valid");
+    }
+
+    #[tokio::test]
+    async fn test_sign_event_direct_preserves_tags() {
+        // Arrange
+        let pool = create_test_db().await;
+        let handler = create_test_handler(pool);
+
+        let tag1 = Tag::parse(vec!["e", "event_id_123"]).unwrap();
+        let tag2 = Tag::parse(vec!["p", "pubkey_456"]).unwrap();
+
+        let unsigned_event = UnsignedEvent::new(
+            handler.user_keys.public_key(),
+            Timestamp::now(),
+            Kind::from(1),
+            vec![tag1.clone(), tag2.clone()],  // tags first
+            "Test with tags",  // content last
+        );
+
+        // Act
+        let signed_event = handler.sign_event_direct(unsigned_event)
+            .await
+            .expect("Signing should succeed");
+
+        // Assert
+        assert_eq!(signed_event.tags.len(), 2);
+        // Check tags individually since Tags doesn't implement contains()
+        let tags_vec: Vec<Tag> = signed_event.tags.iter().cloned().collect();
+        assert!(tags_vec.contains(&tag1));
+        assert!(tags_vec.contains(&tag2));
+    }
+
+    #[tokio::test]
+    async fn test_get_handler_for_user_returns_none_when_not_cached() {
+        // Arrange
+        let pool = create_test_db().await;
+        let key_manager: Box<dyn KeyManager> = Box::new(
+            keycast_core::encryption::file_key_manager::FileKeyManager::new().unwrap()
+        );
+        let signer = UnifiedSigner::new(pool, key_manager).await.unwrap();
+
+        let user_pubkey = Keys::generate().public_key().to_hex();
+
+        // Act
+        let handler = signer.get_handler_for_user(&user_pubkey)
+            .await
+            .expect("Should not error");
+
+        // Assert
+        assert!(handler.is_none(), "Handler should not exist for non-existent user");
+    }
+
+    #[tokio::test]
+    async fn test_handlers_returns_shared_reference() {
+        // Arrange
+        let pool = create_test_db().await;
+        let key_manager: Box<dyn KeyManager> = Box::new(
+            keycast_core::encryption::file_key_manager::FileKeyManager::new().unwrap()
+        );
+        let signer = UnifiedSigner::new(pool, key_manager).await.unwrap();
+
+        // Act
+        let handlers1 = signer.handlers();
+        let handlers2 = signer.handlers();
+
+        // Assert - both should point to same underlying HashMap
+        assert_eq!(
+            Arc::strong_count(&handlers1),
+            Arc::strong_count(&handlers2),
+            "Handlers should share same Arc"
+        );
     }
 }
 

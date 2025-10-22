@@ -109,11 +109,17 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
     // nostr-login connect routes (wildcard path to capture nostrconnect:// URI)
     let connect_routes = Router::new()
         .route("/connect/*nostrconnect", get(oauth::connect_get))
+        .with_state(auth_state.clone());
+
+    // Fast signing endpoint (needs AuthState for key_manager access)
+    let signing_routes = Router::new()
+        .route("/user/sign", post(auth::sign_event))
         .with_state(auth_state);
 
     // Protected user routes (authentication required)
     let user_routes = Router::new()
         .route("/user/bunker", get(auth::get_bunker_url))
+        .route("/user/pubkey", get(auth::get_pubkey))
         .route("/user/profile", get(auth::get_profile))
         .route("/user/sessions", get(auth::list_sessions))
         .route("/user/sessions/:secret/activity", get(auth::get_session_activity))
@@ -123,6 +129,11 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .route("/user/profile", post(auth::update_profile))
         .route("/user/sessions/revoke", post(auth::revoke_session))
         .layer(middleware::from_fn(auth_middleware))
+        .with_state(pool.clone());
+
+    // NIP-05 discovery route (public, no auth required)
+    let discovery_route = Router::new()
+        .route("/.well-known/nostr.json", get(nostr_discovery_public))
         .with_state(pool.clone());
 
     // Protected team routes (authentication required)
@@ -149,16 +160,17 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .with_state(pool);
 
     // Combine routes
-    // Note: discovery route needs to be added at root in main.rs, not here
     Router::new()
         .merge(root_route)
         .merge(register_login_routes)
         .merge(email_routes)
         .merge(oauth_routes)
         .merge(connect_routes)
+        .merge(signing_routes)
         .merge(user_routes)
         .merge(profile_update_routes)
         .merge(team_routes)
+        .merge(discovery_route)
 }
 
 /// NIP-05 discovery endpoint for nostr-login integration

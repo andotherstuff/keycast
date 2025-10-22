@@ -108,7 +108,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a shared state with the database and key manager
     let state = Arc::new(KeycastState {
         db: database.pool,
-        key_manager,
+        key_manager: Arc::new(key_manager),
+        signer_handlers: None,  // Standalone mode - no signer
     });
 
     // Set the shared state in the once cell

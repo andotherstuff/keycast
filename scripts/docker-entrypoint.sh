@@ -23,6 +23,9 @@ wait_for_port() {
 if [ "$1" = "api" ]; then
     echo "Starting API server..."
     exec ./keycast_api
+elif [ "$1" = "unified" ]; then
+    echo "Starting unified service (API + Signer in single process)..."
+    exec ./keycast
 elif [ "$1" = "signer" ]; then
     echo "Starting signer daemon..."
     exec ./keycast_signer
@@ -45,6 +48,6 @@ elif [ "$1" = "signer" ]; then
     exec ./keycast_signer
 else
     echo "Unknown command: $1"
-    echo "Available commands: api, web, signer"
+    echo "Available commands: api, unified, signer, web"
     exit 1
 fi

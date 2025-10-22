@@ -1713,11 +1713,13 @@ dependencies = [
 name = "keycast_signer"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "config",
  "ctrlc",
  "dotenv",
+ "keycast_api",
  "keycast_core",
  "libc",
  "nostr",

@@ -82,6 +82,7 @@ RUN mkdir -p /app/database /data
 # Copy built artifacts
 COPY --from=rust-builder /app/target/release/keycast_api ./
 COPY --from=rust-builder /app/target/release/keycast_signer ./
+COPY --from=rust-builder /app/target/release/keycast ./
 COPY --from=web-builder /app/build ./web
 COPY --from=web-builder /app/package.json ./
 COPY --from=web-builder /app/node_modules ./node_modules
@@ -115,7 +116,7 @@ COPY scripts/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD ["/usr/local/bin/healthcheck.sh"]
+    CMD ["/usr/local/bin/healthcheck.sh", "unified"]
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["api"]
+CMD ["unified"]
