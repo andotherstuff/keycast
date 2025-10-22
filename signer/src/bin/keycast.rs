@@ -79,6 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         signer_handlers: Some(signer_handlers),
     });
 
+    // Set global state for routes that use it
+    keycast_api::state::KEYCAST_STATE.set(api_state.clone()).ok();
+
     // Get API port (default 3000)
     let api_port = env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
