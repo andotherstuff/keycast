@@ -8,6 +8,7 @@ use axum::{
     Json,
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
+use bip39;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use nostr_sdk::{Keys, UnsignedEvent, PublicKey, ToBech32};
@@ -15,6 +16,8 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::env;
+use keycast_core::types::permission::Permission;
+use keycast_core::traits::CustomPermission;
 
 const TOKEN_EXPIRY_HOURS: i64 = 24;
 const EMAIL_VERIFICATION_EXPIRY_HOURS: i64 = 24;
@@ -141,8 +144,10 @@ pub enum AuthError {
     Internal(String),
     MissingToken,
     InvalidToken,
+    TokenExpired,
     EmailSendFailed(String),
     DuplicateKey,  // Nostr pubkey already registered (BYOK case)
+    BadRequest(String),
 }
 
 impl IntoResponse for AuthError {
@@ -215,6 +220,14 @@ impl IntoResponse for AuthError {
             AuthError::DuplicateKey => (
                 StatusCode::CONFLICT,
                 "This Nostr key is already registered. Please log in instead or use a different key.".to_string(),
+            ),
+            AuthError::TokenExpired => (
+                StatusCode::UNAUTHORIZED,
+                "Verification code or token has expired. Please request a new one.".to_string(),
+            ),
+            AuthError::BadRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                msg,
             ),
         };
 
@@ -377,12 +390,28 @@ pub async fn register(
     .execute(&mut *tx)
     .await?;
 
-    // Get the application ID
-    let app_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM oauth_applications WHERE client_id = 'keycast-login'"
+    // Get the application ID and policy_id
+    let app_data: (i64, Option<i64>) = sqlx::query_as(
+        "SELECT id, policy_id FROM oauth_applications WHERE client_id = 'keycast-login' AND tenant_id = ?1"
     )
+    .bind(tenant_id)
     .fetch_one(&mut *tx)
     .await?;
+
+    let (app_id, policy_id) = app_data;
+
+    // If app doesn't have a policy, use default "Standard Social" policy
+    let policy_id = if let Some(pid) = policy_id {
+        pid
+    } else {
+        // Get default policy for this tenant
+        sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM policies WHERE name = 'Standard Social (Default)' AND tenant_id = ?1 LIMIT 1"
+        )
+        .bind(tenant_id)
+        .fetch_one(&mut *tx)
+        .await?
+    };
 
     // Generate bunker keypair for OAuth authorization
     let bunker_keys = Keys::generate();
@@ -405,15 +434,17 @@ pub async fn register(
     // Create OAuth authorization for seamless keycast-login access
     sqlx::query(
         "INSERT INTO oauth_authorizations
-         (user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+         (tenant_id, user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, policy_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
     )
+    .bind(tenant_id)
     .bind(public_key.to_hex())
-    .bind(app_id.0)
+    .bind(app_id)
     .bind(bunker_pubkey.to_hex())
     .bind(&encrypted_bunker_secret)
     .bind(&connection_secret)
     .bind(r#"["wss://relay.damus.io"]"#)
+    .bind(policy_id)
     .bind(Utc::now())
     .bind(Utc::now())
     .execute(&mut *tx)
@@ -1014,6 +1045,135 @@ pub async fn revoke_session(
     }))
 }
 
+#[derive(Debug, Serialize)]
+pub struct PermissionDetail {
+    pub application_name: String,
+    pub application_id: i64,
+    pub policy_name: String,
+    pub policy_id: i64,
+    pub allowed_event_kinds: Vec<u16>,
+    pub event_kind_names: Vec<String>,
+    pub created_at: String,
+    pub last_activity: Option<String>,
+    pub activity_count: i64,
+    pub secret: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PermissionsResponse {
+    pub permissions: Vec<PermissionDetail>,
+}
+
+/// Get detailed permissions for all active authorizations
+pub async fn list_permissions(
+    tenant: crate::api::tenant::TenantExtractor,
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+) -> Result<Json<PermissionsResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    let tenant_id = tenant.0.id;
+    tracing::info!("Listing permissions for user: {} in tenant: {}", user_pubkey, tenant_id);
+
+    // Get OAuth authorizations with policy and permission details
+    let auth_data: Vec<(i64, String, i64, String, String, String, Option<String>, Option<i64>)> = sqlx::query_as(
+        "SELECT
+            oa.application_id,
+            COALESCE(a.name, 'Personal Bunker') as app_name,
+            COALESCE(oa.policy_id, a.policy_id) as policy_id,
+            COALESCE(p.name, 'No Policy') as policy_name,
+            oa.created_at,
+            oa.secret,
+            (SELECT MAX(created_at) FROM signing_activity WHERE bunker_secret = oa.secret) as last_activity,
+            (SELECT COUNT(*) FROM signing_activity WHERE bunker_secret = oa.secret) as activity_count
+         FROM oauth_authorizations oa
+         LEFT JOIN oauth_applications a ON oa.application_id = a.id
+         LEFT JOIN policies p ON COALESCE(oa.policy_id, a.policy_id) = p.id
+         JOIN users u ON oa.user_public_key = u.public_key
+         WHERE oa.user_public_key = ?1
+           AND u.tenant_id = ?2
+           AND oa.revoked_at IS NULL
+         ORDER BY oa.created_at DESC"
+    )
+    .bind(&user_pubkey)
+    .bind(tenant_id)
+    .fetch_all(&pool)
+    .await?;
+
+    let mut permissions = Vec::new();
+
+    for (app_id, app_name, policy_id, policy_name, created_at, secret, last_activity, activity_count) in auth_data {
+        // Get allowed event kinds from policy permissions
+        let event_kinds: Vec<u16> = if policy_id > 0 {
+            let permissions_data: Vec<(String,)> = sqlx::query_as(
+                "SELECT p.config FROM permissions p
+                 JOIN policy_permissions pp ON p.id = pp.permission_id
+                 WHERE pp.policy_id = ?1 AND p.identifier = 'allowed_kinds'"
+            )
+            .bind(policy_id)
+            .fetch_all(&pool)
+            .await?;
+
+            if let Some((config_json,)) = permissions_data.first() {
+                if let Ok(config) = serde_json::from_str::<serde_json::Value>(config_json) {
+                    if let Some(kinds_array) = config.get("allowed_kinds").and_then(|v| v.as_array()) {
+                        kinds_array
+                            .iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u16))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Convert event kinds to human-readable names
+        let event_kind_names: Vec<String> = event_kinds
+            .iter()
+            .map(|&kind| match kind {
+                0 => "Profile (kind 0)".to_string(),
+                1 => "Notes (kind 1)".to_string(),
+                3 => "Follows (kind 3)".to_string(),
+                4 => "Encrypted DM - NIP-04 (kind 4)".to_string(),
+                5 => "Deletion (kind 5)".to_string(),
+                6 => "Repost (kind 6)".to_string(),
+                7 => "Reaction (kind 7)".to_string(),
+                16 => "Generic Repost (kind 16)".to_string(),
+                44 => "Encrypted DM - NIP-44 (kind 44)".to_string(),
+                1059 => "Gift Wrap (kind 1059)".to_string(),
+                1984 => "Report (kind 1984)".to_string(),
+                9734 => "Zap Request (kind 9734)".to_string(),
+                9735 => "Zap Receipt (kind 9735)".to_string(),
+                23194 | 23195 => "Wallet Operation (kind 23194-23195)".to_string(),
+                _ if kind >= 10000 && kind < 20000 => format!("List/Data (kind {})", kind),
+                _ if kind >= 30000 && kind < 40000 => format!("Long-form (kind {})", kind),
+                _ => format!("Kind {}", kind),
+            })
+            .collect();
+
+        permissions.push(PermissionDetail {
+            application_name: app_name,
+            application_id: app_id,
+            policy_name,
+            policy_id,
+            allowed_event_kinds: event_kinds,
+            event_kind_names,
+            created_at,
+            last_activity,
+            activity_count: activity_count.unwrap_or(0),
+            secret,
+        });
+    }
+
+    Ok(Json(PermissionsResponse { permissions }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SignEventRequest {
     pub event: serde_json::Value,  // unsigned event JSON
@@ -1022,6 +1182,77 @@ pub struct SignEventRequest {
 #[derive(Debug, Serialize)]
 pub struct SignEventResponse {
     pub signed_event: serde_json::Value,
+}
+
+/// Validate that the user has permission to sign this event
+/// Returns the policy_id if successful, or an error if unauthorized
+async fn validate_signing_permissions(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_pubkey: &str,
+    event: &UnsignedEvent,
+) -> Result<i64, AuthError> {
+    // Get the policy_id from the keycast-login OAuth app for this tenant
+    let policy_id: Option<i64> = sqlx::query_scalar(
+        "SELECT app.policy_id
+         FROM oauth_applications app
+         WHERE app.client_id = 'keycast-login'
+         AND app.tenant_id = ?1
+         LIMIT 1"
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let policy_id = policy_id.ok_or_else(|| {
+        tracing::warn!("No policy found for user {} in tenant {}", user_pubkey, tenant_id);
+        AuthError::InvalidCredentials
+    })?;
+
+    // Load permissions for this policy
+    let permissions: Vec<Permission> = sqlx::query_as(
+        "SELECT p.*
+         FROM permissions p
+         JOIN policy_permissions pp ON pp.permission_id = p.id
+         WHERE pp.tenant_id = ?1 AND pp.policy_id = ?2"
+    )
+    .bind(tenant_id)
+    .bind(policy_id)
+    .fetch_all(pool)
+    .await?;
+
+    // Convert to custom permissions
+    let custom_permissions: Result<Vec<Box<dyn CustomPermission>>, _> = permissions
+        .iter()
+        .map(|p| p.to_custom_permission())
+        .collect();
+
+    let custom_permissions = custom_permissions
+        .map_err(|e| AuthError::Internal(format!("Failed to convert permissions: {}", e)))?;
+
+    // Validate event against all permissions
+    let event_kind = event.kind.as_u16();
+
+    for permission in custom_permissions {
+        if !permission.can_sign(event) {
+            tracing::warn!(
+                "Permission denied for user {} to sign event kind {} in tenant {}",
+                user_pubkey,
+                event_kind,
+                tenant_id
+            );
+            return Err(AuthError::InvalidCredentials);
+        }
+    }
+
+    tracing::info!(
+        "✅ Permission validated for user {} to sign event kind {} in tenant {}",
+        user_pubkey,
+        event_kind,
+        tenant_id
+    );
+
+    Ok(policy_id)
 }
 
 #[derive(Debug, Serialize)]
@@ -1043,11 +1274,15 @@ pub async fn sign_event(
     let key_manager = auth_state.state.key_manager.as_ref();
     let tenant_id = tenant.0.id;
 
+    // Parse unsigned event first for validation
+    let unsigned_event: UnsignedEvent = serde_json::from_value(req.event.clone())
+        .map_err(|e| AuthError::Internal(format!("Invalid event format: {}", e)))?;
+
+    // 🔒 VALIDATE PERMISSIONS BEFORE SIGNING
+    validate_signing_permissions(pool, tenant_id, &user_pubkey, &unsigned_event).await?;
+
     // FAST PATH: Try to use cached signer handler if in unified mode
     if let Some(ref handlers) = auth_state.state.signer_handlers {
-        // Parse unsigned event from JSON
-        let unsigned_event: UnsignedEvent = serde_json::from_value(req.event.clone())
-            .map_err(|e| AuthError::Internal(format!("Invalid event format: {}", e)))?;
         tracing::info!("Attempting fast path signing for user: {} in tenant: {}", user_pubkey, tenant_id);
 
         // Query for user's bunker public key from OAuth authorization
@@ -1116,10 +1351,7 @@ pub async fn sign_event(
     let keys = Keys::parse(&secret_hex)
         .map_err(|e| AuthError::Internal(format!("Invalid secret key: {}", e)))?;
 
-    // Parse unsigned event
-    let unsigned_event: UnsignedEvent = serde_json::from_value(req.event)
-        .map_err(|e| AuthError::Internal(format!("Invalid event format: {}", e)))?;
-
+    // Permission validation already done above (before fast path check)
     // Sign the event
     let signed_event = unsigned_event.sign(&keys).await
         .map_err(|e| AuthError::Internal(format!("Signing failed: {}", e)))?;
@@ -1170,6 +1402,299 @@ pub async fn get_pubkey(
         pubkey: user_pubkey,
         npub,
     }))
+}
+
+// ===== KEY EXPORT ENDPOINTS =====
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyPasswordRequest {
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyPasswordResponse {
+    pub success: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestKeyExportResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyExportCodeRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyExportCodeResponse {
+    pub export_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportKeyRequest {
+    pub export_token: String,
+    pub format: String,  // "nsec", "ncryptsec", or "mnemonic"
+    pub encryption_password: Option<String>,  // Required for ncryptsec
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExportKeyResponse {
+    pub key: String,
+}
+
+const KEY_EXPORT_CODE_EXPIRY_MINUTES: i64 = 10;
+
+/// Verify user's password before allowing key export
+pub async fn verify_password_for_export(
+    tenant: crate::api::tenant::TenantExtractor,
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+    Json(req): Json<VerifyPasswordRequest>,
+) -> Result<Json<VerifyPasswordResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    let tenant_id = tenant.0.id;
+
+    // Get user's email and password hash
+    let result: Option<(String, String)> = sqlx::query_as(
+        "SELECT email, password_hash FROM users WHERE public_key = ?1 AND tenant_id = ?2"
+    )
+    .bind(&user_pubkey)
+    .bind(tenant_id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let (_email, password_hash) = result.ok_or(AuthError::UserNotFound)?;
+
+    // Verify password
+    let valid = verify(&req.password, &password_hash)
+        .map_err(|_| AuthError::Internal("Password verification failed".to_string()))?;
+
+    if !valid {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    Ok(Json(VerifyPasswordResponse { success: true }))
+}
+
+/// Request key export - sends verification code via email
+pub async fn request_key_export(
+    tenant: crate::api::tenant::TenantExtractor,
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+) -> Result<Json<RequestKeyExportResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    let tenant_id = tenant.0.id;
+
+    // Get user's email
+    let email: Option<String> = sqlx::query_scalar(
+        "SELECT email FROM users WHERE public_key = ?1 AND tenant_id = ?2"
+    )
+    .bind(&user_pubkey)
+    .bind(tenant_id)
+    .fetch_optional(&pool)
+    .await?;
+
+    let email = email.ok_or(AuthError::UserNotFound)?;
+
+    // Generate 6-digit verification code
+    let code: String = format!("{:06}", rand::thread_rng().gen_range(100000..999999));
+    let expires_at = Utc::now() + Duration::minutes(KEY_EXPORT_CODE_EXPIRY_MINUTES);
+
+    // Store code in database
+    sqlx::query(
+        "INSERT INTO key_export_codes (user_public_key, code, expires_at, created_at)
+         VALUES (?1, ?2, ?3, ?4)"
+    )
+    .bind(&user_pubkey)
+    .bind(&code)
+    .bind(expires_at)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
+
+    // Send email with code
+    if let Ok(email_service) = crate::email_service::EmailService::new() {
+        let _ = email_service.send_key_export_code(&email, &code).await;
+    }
+
+    Ok(Json(RequestKeyExportResponse {
+        success: true,
+        message: "Verification code sent to your email".to_string(),
+    }))
+}
+
+/// Verify export code and return export token
+pub async fn verify_export_code(
+    tenant: crate::api::tenant::TenantExtractor,
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+    Json(req): Json<VerifyExportCodeRequest>,
+) -> Result<Json<VerifyExportCodeResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    let tenant_id = tenant.0.id;
+
+    // Verify code and check expiration
+    let result: Option<(String, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT code, expires_at FROM key_export_codes
+         WHERE user_public_key = ?1 AND code = ?2 AND used_at IS NULL
+         ORDER BY created_at DESC LIMIT 1"
+    )
+    .bind(&user_pubkey)
+    .bind(&req.code)
+    .fetch_optional(&pool)
+    .await?;
+
+    let (code, expires_at) = result.ok_or(AuthError::InvalidToken)?;
+
+    if expires_at < Utc::now() {
+        return Err(AuthError::TokenExpired);
+    }
+
+    // Mark code as used
+    sqlx::query(
+        "UPDATE key_export_codes SET used_at = ?1 WHERE user_public_key = ?2 AND code = ?3"
+    )
+    .bind(Utc::now())
+    .bind(&user_pubkey)
+    .bind(&code)
+    .execute(&pool)
+    .await?;
+
+    // Generate export token (valid for 5 minutes)
+    let export_token = generate_secure_token();
+    let token_expires = Utc::now() + Duration::minutes(5);
+
+    sqlx::query(
+        "INSERT INTO key_export_tokens (user_public_key, token, expires_at, created_at)
+         VALUES (?1, ?2, ?3, ?4)"
+    )
+    .bind(&user_pubkey)
+    .bind(&export_token)
+    .bind(token_expires)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await?;
+
+    Ok(Json(VerifyExportCodeResponse { export_token }))
+}
+
+/// Export user's private key in requested format
+pub async fn export_key(
+    tenant: crate::api::tenant::TenantExtractor,
+    State(auth_state): State<super::routes::AuthState>,
+    headers: HeaderMap,
+    Json(req): Json<ExportKeyRequest>,
+) -> Result<Json<ExportKeyResponse>, AuthError> {
+    let user_pubkey = extract_user_from_token(&headers)?;
+    let pool = &auth_state.state.db;
+    let key_manager = auth_state.state.key_manager.as_ref();
+    let tenant_id = tenant.0.id;
+
+    // Verify export token
+    let token_result: Option<(chrono::DateTime<Utc>,)> = sqlx::query_as(
+        "SELECT expires_at FROM key_export_tokens
+         WHERE user_public_key = ?1 AND token = ?2 AND used_at IS NULL"
+    )
+    .bind(&user_pubkey)
+    .bind(&req.export_token)
+    .fetch_optional(pool)
+    .await?;
+
+    let (token_expires,) = token_result.ok_or(AuthError::InvalidToken)?;
+
+    if token_expires < Utc::now() {
+        return Err(AuthError::TokenExpired);
+    }
+
+    // Mark token as used
+    sqlx::query(
+        "UPDATE key_export_tokens SET used_at = ?1 WHERE user_public_key = ?2 AND token = ?3"
+    )
+    .bind(Utc::now())
+    .bind(&user_pubkey)
+    .bind(&req.export_token)
+    .execute(pool)
+    .await?;
+
+    // Get user's encrypted secret key
+    let encrypted_key: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT pk.encrypted_secret_key
+         FROM personal_keys pk
+         JOIN users u ON pk.user_public_key = u.public_key
+         WHERE pk.user_public_key = ?1 AND u.tenant_id = ?2"
+    )
+    .bind(&user_pubkey)
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let encrypted_key = encrypted_key.ok_or(AuthError::UserNotFound)?;
+
+    // Decrypt the secret key
+    let decrypted_secret = key_manager
+        .decrypt(&encrypted_key)
+        .await
+        .map_err(|e| AuthError::Internal(format!("Failed to decrypt key: {}", e)))?;
+
+    // Parse the secret key
+    let keys = Keys::parse(&hex::encode(&decrypted_secret))
+        .map_err(|e| AuthError::Internal(format!("Failed to parse key: {}", e)))?;
+
+    // Format the key based on requested format
+    let key_string = match req.format.as_str() {
+        "nsec" => {
+            // Plain nsec format
+            keys.secret_key().to_bech32()
+                .map_err(|e| AuthError::Internal(format!("Failed to encode nsec: {}", e)))?
+        },
+        "ncryptsec" => {
+            // NIP-49 encrypted format
+            let password = req.encryption_password
+                .ok_or(AuthError::BadRequest("encryption_password required for ncryptsec format".to_string()))?;
+
+            use nostr_sdk::nips::nip49::{EncryptedSecretKey, KeySecurity};
+
+            let encrypted = EncryptedSecretKey::new(
+                keys.secret_key(),
+                &password,
+                16,  // log_n parameter (2^16 rounds)
+                KeySecurity::Unknown,
+            ).map_err(|e| AuthError::Internal(format!("Failed to encrypt key: {}", e)))?;
+
+            encrypted.to_bech32()
+                .map_err(|e| AuthError::Internal(format!("Failed to encode ncryptsec: {}", e)))?
+        },
+        "mnemonic" => {
+            // BIP-39 mnemonic format
+            // Convert the secret key to mnemonic
+            // Note: This is a bit tricky - we need to go from secret key to mnemonic
+            // The proper way is to generate FROM mnemonic, but we're going backwards
+            // For now, we'll generate a mnemonic from the secret key bytes
+
+            let secret_bytes = keys.secret_key().as_secret_bytes();
+            let mnemonic = bip39::Mnemonic::from_entropy(secret_bytes)
+                .map_err(|e| AuthError::Internal(format!("Failed to generate mnemonic: {}", e)))?;
+
+            mnemonic.to_string()
+        },
+        _ => {
+            return Err(AuthError::BadRequest("Invalid format. Must be 'nsec', 'ncryptsec', or 'mnemonic'".to_string()));
+        }
+    };
+
+    // Log the export for security audit
+    sqlx::query(
+        "INSERT INTO key_export_log (user_public_key, format, exported_at) VALUES (?1, ?2, ?3)"
+    )
+    .bind(&user_pubkey)
+    .bind(&req.format)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+
+    Ok(Json(ExportKeyResponse { key: key_string }))
 }
 
 #[cfg(test)]

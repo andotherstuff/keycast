@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use crate::api::http::{auth, oauth, teams};
 use crate::state::KeycastState;
-use axum::response::Html;
+use axum::response::{Html, Json as AxumJson};
+use serde_json::Value as JsonValue;
 
 // State wrapper to pass state to auth handlers
 #[derive(Clone)]
@@ -114,7 +115,7 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
     // Fast signing endpoint (needs AuthState for key_manager access)
     let signing_routes = Router::new()
         .route("/user/sign", post(auth::sign_event))
-        .with_state(auth_state);
+        .with_state(auth_state.clone());
 
     // Protected user routes (authentication required)
     let user_routes = Router::new()
@@ -122,6 +123,7 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .route("/user/pubkey", get(auth::get_pubkey))
         .route("/user/profile", get(auth::get_profile))
         .route("/user/sessions", get(auth::list_sessions))
+        .route("/user/permissions", get(auth::list_permissions))
         .route("/user/sessions/:secret/activity", get(auth::get_session_activity))
         .with_state(pool.clone());
 
@@ -131,10 +133,27 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .layer(middleware::from_fn(auth_middleware))
         .with_state(pool.clone());
 
+    // Key export routes (needs both pool and key_manager)
+    let key_export_routes = Router::new()
+        .route("/user/verify-password", post(auth::verify_password_for_export))
+        .route("/user/request-key-export", post(auth::request_key_export))
+        .route("/user/verify-export-code", post(auth::verify_export_code))
+        .with_state(pool.clone())
+        .layer(middleware::from_fn(auth_middleware));
+
+    let key_export_final = Router::new()
+        .route("/user/export-key", post(auth::export_key))
+        .layer(middleware::from_fn(auth_middleware))
+        .with_state(auth_state.clone());
+
     // NIP-05 discovery route (public, no auth required)
     let discovery_route = Router::new()
         .route("/.well-known/nostr.json", get(nostr_discovery_public))
         .with_state(pool.clone());
+
+    // API documentation route (public)
+    let docs_route = Router::new()
+        .route("/docs/openapi.json", get(openapi_spec));
 
     // Protected team routes (authentication required)
     let team_routes = Router::new()
@@ -169,8 +188,19 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .merge(signing_routes)
         .merge(user_routes)
         .merge(profile_update_routes)
+        .merge(key_export_routes)
+        .merge(key_export_final)
         .merge(team_routes)
         .merge(discovery_route)
+        .merge(docs_route)
+}
+
+/// Serve OpenAPI specification as JSON
+async fn openapi_spec() -> AxumJson<JsonValue> {
+    let yaml_content = include_str!("../../../openapi.yaml");
+    let spec: JsonValue = serde_yaml::from_str(yaml_content)
+        .expect("Failed to parse OpenAPI spec");
+    AxumJson(spec)
 }
 
 /// NIP-05 discovery endpoint for nostr-login integration
