@@ -211,7 +211,7 @@
 				</button>
 				<button
 					class="btn-confirm-revoke"
-					on:click={() => revokePermission(selectedPermission.secret)}
+					on:click={() => revokePermission(selectedPermission!.secret)}
 				>
 					Revoke Access
 				</button>
