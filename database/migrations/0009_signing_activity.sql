@@ -2,7 +2,7 @@
 -- ABOUTME: Records what events were signed, when, and by which app
 
 CREATE TABLE IF NOT EXISTS signing_activity (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     user_public_key CHAR(64) NOT NULL REFERENCES users(public_key) ON DELETE CASCADE,
     application_id INTEGER REFERENCES oauth_applications(id) ON DELETE SET NULL,
     bunker_secret TEXT NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS signing_activity (
     event_content TEXT,
     event_id CHAR(64),
     client_public_key CHAR(64),
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_signing_activity_user ON signing_activity(user_public_key);

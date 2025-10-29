@@ -1,169 +1,162 @@
+-- ================ TRIGGER FUNCTION FOR AUTO-UPDATING updated_at ================
+
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+
 -- ================ USERS ================
 
 CREATE TABLE users (
     public_key CHAR(64) PRIMARY KEY, -- hex
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER users_update_trigger 
-AFTER UPDATE ON users
-BEGIN
-    UPDATE users SET updated_at = DATETIME('now') 
-    WHERE public_key = NEW.public_key;
-END;
+CREATE TRIGGER users_update_trigger
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ TEAMS ================
 
 CREATE TABLE teams (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER teams_update_trigger 
-AFTER UPDATE ON teams
-BEGIN
-    UPDATE teams SET updated_at = DATETIME('now') 
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER teams_update_trigger
+BEFORE UPDATE ON teams
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ TEAM USERS ================
 
 CREATE TABLE team_users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     team_id INTEGER REFERENCES teams(id),
     user_public_key CHAR(64) REFERENCES users(public_key),
     role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER team_users_update_trigger 
-AFTER UPDATE ON team_users
-BEGIN
-    UPDATE team_users SET updated_at = DATETIME('now') 
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER team_users_update_trigger
+BEFORE UPDATE ON team_users
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ STORED KEYS ================
 
 CREATE TABLE stored_keys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     team_id INTEGER REFERENCES teams(id),
     public_key CHAR(64) NOT NULL, -- hex
-    secret_key BLOB NOT NULL, -- encrypted secret key
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    secret_key BYTEA NOT NULL, -- encrypted secret key
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER stored_keys_update_trigger 
-AFTER UPDATE ON stored_keys
-BEGIN
-    UPDATE stored_keys SET updated_at = DATETIME('now') 
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER stored_keys_update_trigger
+BEFORE UPDATE ON stored_keys
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ POLICIES ================
 
 CREATE TABLE policies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     team_id INTEGER REFERENCES teams(id),
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER policies_update_trigger 
-AFTER UPDATE ON policies
-BEGIN
-    UPDATE policies SET updated_at = DATETIME('now') 
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER policies_update_trigger
+BEFORE UPDATE ON policies
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ PERMISSIONS ================
 
 CREATE TABLE permissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     identifier TEXT NOT NULL,
     config TEXT NOT NULL, -- json
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER permissions_update_trigger 
-AFTER UPDATE ON permissions
-BEGIN
-    UPDATE permissions SET updated_at = DATETIME('now') 
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER permissions_update_trigger
+BEFORE UPDATE ON permissions
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ POLICY PERMISSIONS ================
 
 CREATE TABLE policy_permissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     policy_id INTEGER REFERENCES policies(id),
     permission_id INTEGER REFERENCES permissions(id),
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER policy_permissions_update_trigger 
-AFTER UPDATE ON policy_permissions
-BEGIN
-    UPDATE policy_permissions SET updated_at = DATETIME('now') 
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER policy_permissions_update_trigger
+BEFORE UPDATE ON policy_permissions
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ AUTHORIZATIONS ================
 
 CREATE TABLE authorizations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     stored_key_id INTEGER REFERENCES stored_keys(id),
     secret TEXT NOT NULL, -- secret connection uuid
     bunker_public_key CHAR(64) NOT NULL, -- hex
-    bunker_secret BLOB NOT NULL, -- encrypted bunker secret key
+    bunker_secret BYTEA NOT NULL, -- encrypted bunker secret key
     relays TEXT NOT NULL, -- array of relays
     policy_id INTEGER REFERENCES policies(id),
-    max_uses integer,
-    expires_at DATETIME,
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    max_uses INTEGER,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER authorizations_update_trigger 
-AFTER UPDATE ON authorizations
-BEGIN
-    UPDATE authorizations SET updated_at = DATETIME('now')
-    WHERE id = NEW.id;
-END;
+CREATE TRIGGER authorizations_update_trigger
+BEFORE UPDATE ON authorizations
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ USER AUTHORIZATIONS ================
 
 CREATE TABLE user_authorizations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     user_public_key CHAR(64) REFERENCES users(public_key),
     authorization_id INTEGER REFERENCES authorizations(id),
-    created_at DATETIME NOT NULL,
-    updated_at DATETIME NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE TRIGGER user_authorizations_update_trigger 
-AFTER UPDATE ON user_authorizations
-BEGIN
-    UPDATE user_authorizations SET updated_at = DATETIME('now') 
-    WHERE user_public_key = NEW.user_public_key AND authorization_id = NEW.authorization_id;
-END;
+CREATE TRIGGER user_authorizations_update_trigger
+BEFORE UPDATE ON user_authorizations
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
 
 -- ================ INDEXES ================
