@@ -59,7 +59,7 @@ steps:
       - '--set-env-vars'
       - 'RUST_LOG=info,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID}'
       - '--update-secrets'
-      - 'MASTER_KEY_PATH=keycast-master-key:latest'
+      - 'MASTER_KEY_PATH=keycast-master-key:latest,DATABASE_URL=keycast-database-url:latest'
 
   # Smoke tests - verify deployment
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
