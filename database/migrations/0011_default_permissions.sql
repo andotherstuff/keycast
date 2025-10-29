@@ -145,7 +145,6 @@ CROSS JOIN permissions perm
 WHERE p.name = 'Standard Social (Default)'
   AND p.tenant_id = 1
   AND perm.identifier = 'allowed_kinds_social_messaging'
-  AND perm.tenant_id = 1
   AND NOT EXISTS (
     SELECT 1 FROM policy_permissions pp
     WHERE pp.policy_id = p.id AND pp.permission_id = perm.id
@@ -174,7 +173,6 @@ CROSS JOIN permissions perm
 WHERE p.name = 'Read Only'
   AND p.tenant_id = 1
   AND perm.identifier = 'allowed_kinds_social'
-  AND perm.tenant_id = 1
   AND NOT EXISTS (
     SELECT 1 FROM policy_permissions pp
     WHERE pp.policy_id = p.id AND pp.permission_id = perm.id
@@ -203,7 +201,6 @@ CROSS JOIN permissions perm
 WHERE p.name = 'Wallet Only'
   AND p.tenant_id = 1
   AND perm.identifier = 'allowed_kinds_zaps'
-  AND perm.tenant_id = 1
   AND NOT EXISTS (
     SELECT 1 FROM policy_permissions pp
     WHERE pp.policy_id = p.id AND pp.permission_id = perm.id
