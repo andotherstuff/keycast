@@ -39,6 +39,10 @@ CREATE INDEX idx_stored_keys_tenant_id ON stored_keys(tenant_id);
 ALTER TABLE policies ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 1 REFERENCES tenants(id);
 CREATE INDEX idx_policies_tenant_id ON policies(tenant_id);
 
+-- Permissions table
+ALTER TABLE permissions ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 1 REFERENCES tenants(id);
+CREATE INDEX idx_permissions_tenant_id ON permissions(tenant_id);
+
 -- Authorizations table (bunker_public_key must be unique per tenant)
 ALTER TABLE authorizations ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 1 REFERENCES tenants(id);
 CREATE INDEX idx_authorizations_tenant_id ON authorizations(tenant_id);
