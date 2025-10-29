@@ -1,0 +1,625 @@
+openapi: 3.0.3
+info:
+  title: Keycast HTTP API
+  version: 1.0.0
+  description: |
+    # Keycast HTTP Signing API
+
+    Fast HTTP signing for Nostr events without NIP-46 relay overhead. Keycast provides both traditional NIP-46 remote signing and a high-performance HTTP API for low-latency signing operations.
+
+    ## Authentication
+
+    Most endpoints require a JWT token obtained from the `/auth/login` or `/auth/register` endpoints. Include the token in the `Authorization` header:
+
+    ```
+    Authorization: Bearer <your-jwt-token>
+    ```
+
+    ## Performance
+
+    - **Fast Path**: ~10ms signing using cached handlers (unified mode)
+    - **Slow Path**: ~50-100ms signing using database + KMS decryption
+
+    ## Security Notes
+
+    ⚠️ **Current Limitations**:
+    - No permission validation on HTTP signing endpoint
+    - No rate limiting (endpoints can be called unlimited times)
+    - JWT tokens valid for 24 hours
+
+    These limitations are being addressed in upcoming releases.
+
+  contact:
+    name: Keycast Support
+    url: https://github.com/rabble/keycast
+  license:
+    name: MIT
+servers:
+  - url: https://oauth.divine.video/api
+    description: Production server
+  - url: http://localhost:3000/api
+    description: Local development
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token from /auth/register or /auth/login
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+      required:
+        - error
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: "SecureP@ssw0rd"
+        nsec:
+          type: string
+          description: Optional user-provided Nostr secret key (nsec or hex format). If not provided, a new key will be generated.
+          example: "nsec1..."
+      required:
+        - email
+        - password
+
+    RegisterResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          description: User's public key (hex format)
+        email:
+          type: string
+        pubkey:
+          type: string
+          description: User's Nostr public key (hex format)
+        token:
+          type: string
+          description: JWT authentication token
+      required:
+        - user_id
+        - email
+        - pubkey
+        - token
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+      required:
+        - email
+        - password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT authentication token
+        pubkey:
+          type: string
+          description: User's Nostr public key (hex format)
+      required:
+        - token
+        - pubkey
+
+    NostrEvent:
+      type: object
+      description: Nostr event structure (NIP-01)
+      properties:
+        kind:
+          type: integer
+          description: Event kind number
+          example: 1
+        content:
+          type: string
+          description: Event content
+          example: "Hello Nostr!"
+        tags:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+          example: [["p", "pubkey123"], ["e", "eventid456"]]
+        created_at:
+          type: integer
+          description: Unix timestamp
+          example: 1234567890
+      required:
+        - kind
+        - content
+        - tags
+        - created_at
+
+    SignedNostrEvent:
+      allOf:
+        - $ref: '#/components/schemas/NostrEvent'
+        - type: object
+          properties:
+            id:
+              type: string
+              description: Event ID (hex format)
+            pubkey:
+              type: string
+              description: Author's public key (hex format)
+            sig:
+              type: string
+              description: Schnorr signature (hex format)
+          required:
+            - id
+            - pubkey
+            - sig
+
+    SignEventRequest:
+      type: object
+      properties:
+        event:
+          $ref: '#/components/schemas/NostrEvent'
+      required:
+        - event
+
+    SignEventResponse:
+      type: object
+      properties:
+        signed_event:
+          $ref: '#/components/schemas/SignedNostrEvent'
+      required:
+        - signed_event
+
+    BunkerUrlResponse:
+      type: object
+      properties:
+        bunker_url:
+          type: string
+          format: uri
+          description: NIP-46 bunker connection string
+          example: "bunker://pubkey?relay=wss://relay.example.com&secret=xyz"
+      required:
+        - bunker_url
+
+    PubkeyResponse:
+      type: object
+      properties:
+        pubkey:
+          type: string
+          description: Public key in hex format
+          example: "abc123..."
+        npub:
+          type: string
+          description: Public key in bech32 format
+          example: "npub1..."
+      required:
+        - pubkey
+        - npub
+
+    UserProfile:
+      type: object
+      properties:
+        public_key:
+          type: string
+        username:
+          type: string
+          nullable: true
+        display_name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+        email:
+          type: string
+        email_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SessionInfo:
+      type: object
+      properties:
+        bunker_public_key:
+          type: string
+        application_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+paths:
+  /auth/register:
+    post:
+      summary: Register new user
+      description: |
+        Create a new user account with email/password authentication. Automatically generates a Nostr keypair and returns a JWT token for immediate use.
+
+        **BYOK Support**: You can optionally provide your own Nostr secret key via the `nsec` parameter. If not provided, a new key will be generated.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              basic:
+                summary: Register with auto-generated key
+                value:
+                  email: "user@example.com"
+                  password: "SecurePassword123"
+              byok:
+                summary: Register with your own key (BYOK)
+                value:
+                  email: "user@example.com"
+                  password: "SecurePassword123"
+                  nsec: "nsec1abc123..."
+      responses:
+        '200':
+          description: Successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          description: Invalid request (email already exists, weak password, invalid nsec)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login:
+    post:
+      summary: Login
+      description: Authenticate with email/password and receive a JWT token valid for 24 hours.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successfully authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /user/sign:
+    post:
+      summary: Sign Nostr event (Fast HTTP signing)
+      description: |
+        Sign a Nostr event via HTTP - **10-50x faster than NIP-46**.
+
+        ## Performance
+        - **Fast path** (~10ms): Uses cached authorization handlers in unified mode
+        - **Slow path** (~50-100ms): Decrypts key from database using KMS
+
+        ## ⚠️ Security Warning
+        **This endpoint currently has NO permission validation**. Any authenticated user can sign any event kind with any content. Permission checks are coming in a future release.
+
+        ## Supported Event Kinds
+        Currently accepts all Nostr event kinds (0-65535), including:
+        - `kind: 0` - User metadata
+        - `kind: 1` - Short text note
+        - `kind: 3` - Contact list
+        - `kind: 4` - Encrypted direct message
+        - `kind: 5` - Deletion
+        - `kind: 1984` - Reporting
+        - `kind: 9734-9735` - Zaps
+        - `kind: 10000+` - Replaceable events
+        - `kind: 20000+` - Ephemeral events
+        - `kind: 30000+` - Parameterized replaceable events
+      tags:
+        - Signing
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignEventRequest'
+            examples:
+              text_note:
+                summary: Sign a text note (kind 1)
+                value:
+                  event:
+                    kind: 1
+                    content: "Hello from Keycast!"
+                    tags: []
+                    created_at: 1234567890
+              dm:
+                summary: Sign encrypted DM (kind 4)
+                value:
+                  event:
+                    kind: 4
+                    content: "encrypted_content_here"
+                    tags: [["p", "recipient_pubkey"]]
+                    created_at: 1234567890
+      responses:
+        '200':
+          description: Event successfully signed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignEventResponse'
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: User not found or key not available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Signing failed (KMS error, invalid key, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /user/bunker:
+    get:
+      summary: Get NIP-46 bunker URL
+      description: |
+        Retrieve the NIP-46 bunker connection string for traditional relay-based signing.
+
+        Use this when you need full NIP-46 compatibility with permission validation, or when HTTP signing is not available.
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Bunker URL retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BunkerUrlResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /user/pubkey:
+    get:
+      summary: Get user's public key
+      description: Returns the user's Nostr public key in both hex and npub (bech32) formats.
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Public key retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PubkeyResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /user/profile:
+    get:
+      summary: Get user profile
+      description: Retrieve the authenticated user's profile information including email, username, and Nostr metadata.
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profile retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Update user profile
+      description: Update username, display name, or avatar URL for the authenticated user.
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: "alice"
+                display_name:
+                  type: string
+                  example: "Alice Smith"
+                avatar_url:
+                  type: string
+                  format: uri
+                  example: "https://example.com/avatar.jpg"
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /user/sessions:
+    get:
+      summary: List active sessions
+      description: Get all active NIP-46 authorization sessions for the authenticated user.
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Sessions retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionInfo'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /user/sessions/revoke:
+    post:
+      summary: Revoke a session
+      description: Revoke an active NIP-46 authorization session by its bunker public key.
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bunker_pubkey:
+                  type: string
+                  description: Bunker public key to revoke
+              required:
+                - bunker_pubkey
+      responses:
+        '200':
+          description: Session revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /.well-known/nostr.json:
+    get:
+      summary: NIP-05 discovery
+      description: |
+        NIP-05 identifier verification endpoint.
+
+        Query by username: `/.well-known/nostr.json?name=alice`
+      tags:
+        - Discovery
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: Username to look up
+          schema:
+            type: string
+            example: alice
+      responses:
+        '200':
+          description: NIP-05 discovery response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  names:
+                    type: object
+                    additionalProperties:
+                      type: string
+                    example:
+                      alice: "abc123..."
+                  relays:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+                    example:
+                      "abc123...": ["wss://relay.example.com"]
+
+tags:
+  - name: Authentication
+    description: User registration and authentication endpoints
+  - name: Signing
+    description: Fast HTTP signing for Nostr events
+  - name: User
+    description: User profile and session management
+  - name: Discovery
+    description: NIP-05 identifier discovery

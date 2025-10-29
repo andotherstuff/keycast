@@ -59,9 +59,15 @@ gcloud run deploy keycast-signer \
 
 **Current Problem**: Production uses an ephemeral SQLite database stored at `/app/database/keycast.db` which is RECREATED on every deployment, **losing all data**.
 
+**Litestream Backup Not Working**: There's a path mismatch between:
+- Application database: `/app/database/keycast.db`
+- Litestream monitoring: `/data/keycast.db`
+
+Litestream is NOT actually backing up the application database!
+
 **Temporary Solution**: The database is mounted in the container's writable layer, but this is not persistent across deployments.
 
-**Proper Solution Needed**: Use Cloud SQL or mount a persistent disk for the database.
+**Proper Solution (In Progress)**: Migrating to Cloud SQL PostgreSQL for persistent storage.
 
 ## Service Architecture
 

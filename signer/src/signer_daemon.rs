@@ -7,7 +7,7 @@ use keycast_core::signing_handler::SigningHandler;
 use keycast_core::types::authorization::Authorization;
 use keycast_core::types::oauth_authorization::OAuthAuthorization;
 use nostr_sdk::prelude::*;
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,23 +17,23 @@ pub struct AuthorizationHandler {
     bunker_keys: Keys,
     user_keys: Keys,
     secret: String,
-    authorization_id: u32,
+    authorization_id: i32,
     tenant_id: i64,
     is_oauth: bool,
-    pool: SqlitePool,
+    pool: PgPool,
 }
 
 pub struct UnifiedSigner {
     handlers: Arc<RwLock<HashMap<String, AuthorizationHandler>>>, // bunker_pubkey -> handler
     client: Client,
-    pool: SqlitePool,
+    pool: PgPool,
     key_manager: Arc<Box<dyn KeyManager>>,
     max_loaded_oauth_id: Arc<RwLock<u32>>,
     max_loaded_regular_id: Arc<RwLock<u32>>,
 }
 
 impl UnifiedSigner {
-    pub async fn new(pool: SqlitePool, key_manager: Box<dyn KeyManager>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(pool: PgPool, key_manager: Box<dyn KeyManager>) -> Result<Self, Box<dyn std::error::Error>> {
         let client = Client::default();
 
         Ok(Self {
@@ -224,7 +224,7 @@ impl UnifiedSigner {
     }
 
     async fn reload_authorizations_if_needed(
-        pool: &SqlitePool,
+        pool: &PgPool,
         key_manager: &Arc<Box<dyn KeyManager>>,
         handlers: &Arc<RwLock<HashMap<String, AuthorizationHandler>>>,
         _client: &Client,
@@ -356,7 +356,7 @@ impl UnifiedSigner {
         handlers: Arc<RwLock<HashMap<String, AuthorizationHandler>>>,
         client: Client,
         event: Box<Event>,
-        pool: &SqlitePool,
+        pool: &PgPool,
         key_manager: &Arc<Box<dyn KeyManager>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // SINGLE SUBSCRIPTION ARCHITECTURE:
@@ -866,8 +866,8 @@ mod tests {
     use super::*;
 
     /// Helper to create test database with minimal schema
-    async fn create_test_db() -> SqlitePool {
-        let pool = SqlitePool::connect(":memory:").await.unwrap();
+    async fn create_test_db() -> PgPool {
+        let pool = PgPool::connect(":memory:").await.unwrap();
 
         // Create minimal schema needed for tests
         sqlx::query(
@@ -917,7 +917,7 @@ mod tests {
     }
 
     /// Helper to create test authorization handler
-    fn create_test_handler(pool: SqlitePool) -> AuthorizationHandler {
+    fn create_test_handler(pool: PgPool) -> AuthorizationHandler {
         let user_keys = create_test_keys();
         let bunker_keys = create_test_keys();
 

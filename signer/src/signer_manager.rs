@@ -1,6 +1,6 @@
 use keycast_core::types::authorization::{Authorization, AuthorizationError};
 use keycast_core::types::oauth_authorization::OAuthAuthorization;
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -38,7 +38,7 @@ pub struct AuthorizationKey {
 #[derive(Debug, Clone)]
 pub struct SignerManager {
     database_url: String,
-    pub pool: SqlitePool,
+    pub pool: PgPool,
     process_check_interval_seconds: u64,
     signer_processes: Arc<Mutex<HashMap<AuthorizationKey, Child>>>, // (auth_id, type) -> process
 }
@@ -46,7 +46,7 @@ pub struct SignerManager {
 impl SignerManager {
     pub fn new(
         database_url: String,
-        pool: SqlitePool,
+        pool: PgPool,
         process_check_interval_seconds: u64,
     ) -> Self {
         Self {

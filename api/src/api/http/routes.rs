@@ -4,7 +4,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::sync::Arc;
 
 use crate::api::http::{auth, oauth, teams};
@@ -75,7 +75,7 @@ async fn landing_page() -> Html<&'static str> {
 }
 
 /// Build routes with explicit state - the proper way to structure an Axum app
-pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
+pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
     tracing::debug!("Building routes");
 
     let auth_state = AuthState {
@@ -87,7 +87,7 @@ pub fn routes(pool: SqlitePool, state: Arc<KeycastState>) -> Router {
         .route("/", get(landing_page));
 
     // Public auth routes (no authentication required)
-    // Register and login need AuthState, email verification needs SqlitePool
+    // Register and login need AuthState, email verification needs PgPool
     let register_login_routes = Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
@@ -207,7 +207,7 @@ async fn openapi_spec() -> AxumJson<JsonValue> {
 /// This should be mounted at root level in main.rs, not under /api
 pub async fn nostr_discovery_public(
     tenant: crate::api::tenant::TenantExtractor,
-    axum::extract::State(pool): axum::extract::State<SqlitePool>,
+    axum::extract::State(pool): axum::extract::State<PgPool>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::{header, StatusCode};

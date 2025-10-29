@@ -17,11 +17,11 @@ pub enum PolicyError {
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct Policy {
     /// The id of the policy
-    pub id: u32,
+    pub id: i32,
     /// The name of the policy
     pub name: String,
     /// The id of the team the policy belongs to
-    pub team_id: u32,
+    pub team_id: i32,
     /// The date and time the policy was created
     pub created_at: DateTime<chrono::Utc>,
     /// The date and time the policy was last updated

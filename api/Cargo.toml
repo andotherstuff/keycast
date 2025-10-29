@@ -11,6 +11,7 @@ async-trait = "0.1"
 axum = "0.7"
 base64 = { workspace = true }
 bcrypt = "0.15"
+bip39 = "2.0"
 chrono = { workspace = true }
 config = { workspace = true }
 dotenv = { workspace = true }
@@ -22,6 +23,7 @@ once_cell = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
 sha256 = "1.5"
 sqlx = { workspace = true }
 thiserror = { workspace = true }

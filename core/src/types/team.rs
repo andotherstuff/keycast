@@ -8,7 +8,7 @@ use chrono::DateTime;
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -45,7 +45,7 @@ pub enum TeamError {
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct Team {
     /// The id of the team
-    pub id: u32,
+    pub id: i32,
     /// The name of the team
     pub name: String,
     /// The date and time the team was created
@@ -71,12 +71,12 @@ pub struct KeyWithRelations {
 
 impl Team {
     pub async fn find_with_relations(
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
-        team_id: u32,
+        team_id: i32,
     ) -> Result<TeamWithRelations, TeamError> {
         // Get team
-        let team = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE tenant_id = ?1 AND id = ?2")
+        let team = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id)
             .bind(team_id)
             .fetch_one(pool)
@@ -87,7 +87,7 @@ impl Team {
             r#"
             SELECT tu.*
             FROM team_users tu
-            WHERE tu.tenant_id = ?1 AND tu.team_id = ?2
+            WHERE tu.tenant_id = $1 AND tu.team_id = $2
             "#,
         )
         .bind(tenant_id)
@@ -97,7 +97,7 @@ impl Team {
 
         // Get stored keys for this team
         let stored_keys =
-            sqlx::query_as::<_, StoredKey>("SELECT * FROM stored_keys WHERE tenant_id = ?1 AND team_id = ?2")
+            sqlx::query_as::<_, StoredKey>("SELECT * FROM stored_keys WHERE tenant_id = $1 AND team_id = $2")
                 .bind(tenant_id)
                 .bind(team_id)
                 .fetch_all(pool)
@@ -120,12 +120,12 @@ impl Team {
     }
 
     pub async fn get_policies_with_permissions(
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
-        team_id: u32,
+        team_id: i32,
     ) -> Result<Vec<PolicyWithPermissions>, TeamError> {
         // First fetch policies
-        let policies = sqlx::query_as::<_, Policy>("SELECT * FROM policies WHERE tenant_id = ?1 AND team_id = ?2")
+        let policies = sqlx::query_as::<_, Policy>("SELECT * FROM policies WHERE tenant_id = $1 AND team_id = $2")
             .bind(tenant_id)
             .bind(team_id)
             .fetch_all(pool)
@@ -137,7 +137,7 @@ impl Team {
             let permissions = sqlx::query_as::<_, Permission>(
                 "SELECT p.* FROM permissions p
                  JOIN policy_permissions pp ON pp.permission_id = p.id
-                 WHERE pp.tenant_id = ?1 AND pp.policy_id = ?2",
+                 WHERE pp.tenant_id = $1 AND pp.policy_id = $2",
             )
             .bind(tenant_id)
             .bind(policy.id)

@@ -1,7 +1,7 @@
 // ABOUTME: Type-safe database query helpers that automatically inject tenant_id filtering
 // ABOUTME: Prevents cross-tenant data leakage by making tenant context explicit
 
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, PgPool};
 
 /// Newtype wrapper for tenant ID to prevent mixing with other integer IDs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, sqlx::Type)]
@@ -20,21 +20,21 @@ impl TenantId {
 
 /// Helper struct for building tenant-scoped SELECT queries
 pub struct TenantSelect<'a, T> {
-    pool: &'a SqlitePool,
+    pool: &'a PgPool,
     tenant_id: TenantId,
     sql: String,
-    bindings: Vec<Box<dyn sqlx::Encode<'a, sqlx::Sqlite> + Send + 'a>>,
+    bindings: Vec<Box<dyn sqlx::Encode<'a, sqlx::Postgres> + Send + 'a>>,
     _phantom: std::marker::PhantomData<T>,
 }
 
 impl<'a, T> TenantSelect<'a, T>
 where
-    T: for<'r> FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin + Send,
+    T: for<'r> FromRow<'r, sqlx::postgres::PgRow> + Unpin + Send,
 {
     /// Create a new tenant-scoped SELECT query
     ///
     /// The SQL should NOT include tenant_id filtering - it will be added automatically
-    pub fn new(pool: &'a SqlitePool, tenant_id: TenantId, sql: impl Into<String>) -> Self {
+    pub fn new(pool: &'a PgPool, tenant_id: TenantId, sql: impl Into<String>) -> Self {
         Self {
             pool,
             tenant_id,
@@ -47,7 +47,7 @@ where
     /// Bind a parameter to the query
     pub fn bind<V>(mut self, value: V) -> Self
     where
-        V: 'a + Send + sqlx::Encode<'a, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
+        V: 'a + Send + sqlx::Encode<'a, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
     {
         self.bindings.push(Box::new(value));
         self
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_inject_tenant_filter_with_where() {
-        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let pool = PgPool::connect_lazy("sqlite::memory:").unwrap();
         let select = TenantSelect::<()>::new(
             &pool,
             TenantId(1),
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_inject_tenant_filter_without_where() {
-        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let pool = PgPool::connect_lazy("sqlite::memory:").unwrap();
         let select = TenantSelect::<()>::new(
             &pool,
             TenantId(1),

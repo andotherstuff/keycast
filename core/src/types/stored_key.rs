@@ -30,9 +30,9 @@ pub enum KeyError {
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct StoredKey {
     /// The id of the stored key
-    pub id: u32,
+    pub id: i32,
     /// The id of the team the key belongs to
-    pub team_id: u32,
+    pub team_id: i32,
     /// The name of the key
     pub name: String,
     /// The public key of the key, in hex format
@@ -48,8 +48,8 @@ pub struct StoredKey {
 /// A public representation of a stored key, without the secret key
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PublicStoredKey {
-    pub id: u32,
-    pub team_id: u32,
+    pub id: i32,
+    pub team_id: i32,
     pub name: String,
     pub public_key: String,
     pub created_at: DateTime<chrono::Utc>,

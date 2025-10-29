@@ -1,7 +1,7 @@
 use keycast_core::encryption::KeyManager;
 use keycast_core::signing_handler::SigningHandler;
 use once_cell::sync::OnceCell;
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -16,7 +16,7 @@ pub enum StateError {
 }
 
 pub struct KeycastState {
-    pub db: SqlitePool,
+    pub db: PgPool,
     pub key_manager: Arc<Box<dyn KeyManager>>,
     /// Optional signer handlers for unified mode
     /// Maps bunker_public_key -> SigningHandler trait object
@@ -25,7 +25,7 @@ pub struct KeycastState {
 
 pub static KEYCAST_STATE: OnceCell<Arc<KeycastState>> = OnceCell::new();
 
-pub fn get_db_pool() -> Result<&'static SqlitePool, StateError> {
+pub fn get_db_pool() -> Result<&'static PgPool, StateError> {
     KEYCAST_STATE
         .get()
         .map(|state| &state.db)

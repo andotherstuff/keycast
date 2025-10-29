@@ -130,7 +130,7 @@ pub async fn authorize_post(
 
     // Get or create application
     let app_id: Option<i64> =
-        sqlx::query_scalar("SELECT id FROM oauth_applications WHERE tenant_id = ?1 AND client_id = ?2")
+        sqlx::query_scalar("SELECT id FROM oauth_applications WHERE tenant_id = $1 AND client_id = $2")
             .bind(tenant_id)
             .bind(&req.client_id)
             .fetch_optional(&auth_state.state.db)
@@ -142,7 +142,7 @@ pub async fn authorize_post(
         // Create test application
         sqlx::query_scalar(
             "INSERT INTO oauth_applications (tenant_id, client_id, client_secret, name, redirect_uris, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id"
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"
         )
         .bind(tenant_id)
         .bind(&req.client_id)
@@ -158,7 +158,7 @@ pub async fn authorize_post(
     // Store authorization code
     sqlx::query(
         "INSERT INTO oauth_codes (tenant_id, code, user_public_key, application_id, redirect_uri, scope, expires_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
     )
     .bind(tenant_id)
     .bind(&code)
@@ -193,7 +193,7 @@ pub async fn token(
     // Fetch and validate authorization code
     let auth_code: Option<(String, i64, String, String)> = sqlx::query_as(
         "SELECT user_public_key, application_id, redirect_uri, scope FROM oauth_codes
-         WHERE tenant_id = ?1 AND code = ?2 AND expires_at > ?3"
+         WHERE tenant_id = $1 AND code = $2 AND expires_at > $3"
     )
     .bind(tenant_id)
     .bind(&req.code)
@@ -212,7 +212,7 @@ pub async fn token(
     }
 
     // Delete the authorization code (one-time use)
-    sqlx::query("DELETE FROM oauth_codes WHERE tenant_id = ?1 AND code = ?2")
+    sqlx::query("DELETE FROM oauth_codes WHERE tenant_id = $1 AND code = $2")
         .bind(tenant_id)
         .bind(&req.code)
         .execute(pool)
@@ -221,7 +221,7 @@ pub async fn token(
     // Look up user's personal Nostr key from personal_keys table
     // We get the encrypted key to use as the bunker secret (for NIP-46 decryption + signing)
     let encrypted_user_key: Vec<u8> = sqlx::query_scalar(
-        "SELECT encrypted_secret_key FROM personal_keys WHERE tenant_id = ?1 AND user_public_key = ?2"
+        "SELECT encrypted_secret_key FROM personal_keys WHERE tenant_id = $1 AND user_public_key = $2"
     )
     .bind(tenant_id)
     .bind(&user_public_key)
@@ -247,7 +247,7 @@ pub async fn token(
 
     sqlx::query(
         "INSERT INTO oauth_authorizations (tenant_id, user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
     )
     .bind(tenant_id)
     .bind(&user_public_key)

@@ -6,7 +6,7 @@ use keycast_core::types::user::TeamUserRole;
 
 #[derive(Debug, Serialize)]
 pub struct TeamResponse {
-    pub id: u32,
+    pub id: i32,
     pub name: String,
     pub created_at: DateTime<chrono::Utc>,
     pub updated_at: DateTime<chrono::Utc>,
@@ -19,7 +19,7 @@ pub struct CreateTeamRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateTeamRequest {
-    pub id: u32,
+    pub id: i32,
     pub name: String,
 }
 
@@ -49,7 +49,7 @@ pub struct CreatePolicyRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AddAuthorizationRequest {
-    pub policy_id: u32,
+    pub policy_id: i32,
     pub relays: Vec<String>,
     pub max_uses: Option<i32>,
     #[serde(default)]

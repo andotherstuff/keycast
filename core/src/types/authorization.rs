@@ -8,7 +8,7 @@ use chrono::DateTime;
 use nostr::nips::nip46::Request;
 use nostr_sdk::PublicKey;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, PgPool};
 use thiserror::Error;
 use urlencoding;
 
@@ -65,9 +65,9 @@ impl TryFrom<String> for Relays {
 #[derive(Debug, FromRow, Serialize, Deserialize, Clone)]
 pub struct Authorization {
     /// The id of the authorization
-    pub id: u32,
+    pub id: i32,
     /// The id of the stored key the authorization belongs to
-    pub stored_key_id: u32,
+    pub stored_key_id: i32,
     /// The generated secret connection uuid
     pub secret: String,
     /// The public key of the bunker nostr secret key
@@ -78,9 +78,9 @@ pub struct Authorization {
     /// The list of relays the authorization will listen on
     pub relays: Relays,
     /// The id of the policy the authorization belongs to
-    pub policy_id: u32,
+    pub policy_id: i32,
     /// The maximum number of uses for this authorization, None means unlimited
-    pub max_uses: Option<u16>,
+    pub max_uses: Option<i16>,
     /// The date and time at which this authorization expires, None means it never expires
     pub expires_at: Option<DateTime<chrono::Utc>>,
     /// The date and time the authorization was created
@@ -109,33 +109,33 @@ pub struct UserAuthorization {
 impl Authorization {
     /// Get the number of redemptions used for this authorization
     /// This method is synchronous/blocking so that we can use it in the signing daemon
-    pub fn redemptions_count_sync(&self, pool: &SqlitePool, tenant_id: i64) -> Result<u16, AuthorizationError> {
+    pub fn redemptions_count_sync(&self, pool: &PgPool, tenant_id: i64) -> Result<i16, AuthorizationError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let count = sqlx::query_scalar::<_, i64>(
                     r#"
-                    SELECT COUNT(*) FROM user_authorizations WHERE tenant_id = ?1 AND authorization_id = ?2
+                    SELECT COUNT(*) FROM user_authorizations WHERE tenant_id = $1 AND authorization_id = $2
                     "#,
                 )
                 .bind(tenant_id)
                 .bind(self.id)
                 .fetch_one(pool)
                 .await?;
-                Ok(count as u16)
+                Ok(count as i16)
             })
         })
     }
 
     pub fn redemptions_pubkeys_sync(
         &self,
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
     ) -> Result<Vec<PublicKey>, AuthorizationError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let pubkeys = sqlx::query_scalar::<_, String>(
                     r#"
-                    SELECT user_public_key FROM user_authorizations WHERE tenant_id = ?1 AND authorization_id = ?2
+                    SELECT user_public_key FROM user_authorizations WHERE tenant_id = $1 AND authorization_id = $2
                     "#,
                 )
                 .bind(tenant_id)
@@ -152,7 +152,7 @@ impl Authorization {
 
     pub fn create_redemption_sync(
         &self,
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
         pubkey: &PublicKey,
     ) -> Result<(), AuthorizationError> {
@@ -161,7 +161,7 @@ impl Authorization {
                 // Check if the user exists
                 let user = sqlx::query_scalar::<_, String>(
                     r#"
-                    SELECT public_key FROM users WHERE tenant_id = ?1 AND public_key = ?2
+                    SELECT public_key FROM users WHERE tenant_id = $1 AND public_key = $2
                     "#,
                 )
                 .bind(tenant_id)
@@ -175,7 +175,7 @@ impl Authorization {
                     sqlx::query(
                         r#"
                         INSERT INTO users (tenant_id, public_key, created_at, updated_at)
-                        VALUES (?1, ?2, ?3, ?4)
+                        VALUES ($1, $2, $3, $4)
                         "#,
                     )
                     .bind(tenant_id)
@@ -190,7 +190,7 @@ impl Authorization {
                 sqlx::query(
                     r#"
                     INSERT INTO user_authorizations (tenant_id, authorization_id, user_public_key, created_at, updated_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    VALUES ($1, $2, $3, $4, $5)
                     "#,
                 )
                 .bind(tenant_id)
@@ -205,10 +205,10 @@ impl Authorization {
         })
     }
 
-    pub async fn find(pool: &SqlitePool, tenant_id: i64, id: u32) -> Result<Self, AuthorizationError> {
+    pub async fn find(pool: &PgPool, tenant_id: i64, id: i32) -> Result<Self, AuthorizationError> {
         let authorization = sqlx::query_as::<_, Authorization>(
             r#"
-            SELECT * FROM authorizations WHERE tenant_id = ?1 AND id = ?2
+            SELECT * FROM authorizations WHERE tenant_id = $1 AND id = $2
             "#,
         )
         .bind(tenant_id)
@@ -218,10 +218,10 @@ impl Authorization {
         Ok(authorization)
     }
 
-    pub async fn all_ids(pool: &SqlitePool, tenant_id: i64) -> Result<Vec<u32>, AuthorizationError> {
-        let authorizations = sqlx::query_scalar::<_, u32>(
+    pub async fn all_ids(pool: &PgPool, tenant_id: i64) -> Result<Vec<i32>, AuthorizationError> {
+        let authorizations = sqlx::query_scalar::<_, i32>(
             r#"
-            SELECT id FROM authorizations WHERE tenant_id = ?1
+            SELECT id FROM authorizations WHERE tenant_id = $1
             "#,
         )
         .bind(tenant_id)
@@ -230,8 +230,8 @@ impl Authorization {
         Ok(authorizations)
     }
 
-    pub async fn all_ids_for_all_tenants(pool: &SqlitePool) -> Result<Vec<(i64, u32)>, AuthorizationError> {
-        let authorizations = sqlx::query_as::<_, (i64, u32)>(
+    pub async fn all_ids_for_all_tenants(pool: &PgPool) -> Result<Vec<(i64, i32)>, AuthorizationError> {
+        let authorizations = sqlx::query_as::<_, (i64, i32)>(
             r#"
             SELECT tenant_id, id FROM authorizations
             "#,
@@ -242,10 +242,10 @@ impl Authorization {
     }
 
     /// Get the stored key for this authorization
-    pub async fn stored_key(&self, pool: &SqlitePool, tenant_id: i64) -> Result<StoredKey, AuthorizationError> {
+    pub async fn stored_key(&self, pool: &PgPool, tenant_id: i64) -> Result<StoredKey, AuthorizationError> {
         let stored_key = sqlx::query_as::<_, StoredKey>(
             r#"
-            SELECT * FROM stored_keys WHERE tenant_id = ?1 AND id = ?2
+            SELECT * FROM stored_keys WHERE tenant_id = $1 AND id = $2
             "#,
         )
         .bind(tenant_id)
@@ -259,7 +259,7 @@ impl Authorization {
     /// This method is synchronous/blocking so that we can use it in the signing daemon
     pub fn permissions_sync(
         &self,
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
     ) -> Result<Vec<Permission>, AuthorizationError> {
         tokio::task::block_in_place(|| {
@@ -270,7 +270,7 @@ impl Authorization {
                     FROM permissions p
                     JOIN policy_permissions pp ON pp.permission_id = p.id
                     JOIN policies pol ON pol.id = pp.policy_id
-                    WHERE pp.tenant_id = ?1 AND pol.id = ?2
+                    WHERE pp.tenant_id = $1 AND pol.id = $2
                     "#,
                 )
                 .bind(tenant_id)
@@ -308,7 +308,7 @@ impl Authorization {
         }
     }
 
-    fn fully_redeemed(&self, pool: &SqlitePool, tenant_id: i64) -> Result<bool, AuthorizationError> {
+    fn fully_redeemed(&self, pool: &PgPool, tenant_id: i64) -> Result<bool, AuthorizationError> {
         match self.max_uses {
             Some(max_uses) => {
                 let redemptions = match self.redemptions_count_sync(pool, tenant_id) {
@@ -327,7 +327,7 @@ impl Authorization {
 impl AuthorizationValidations for Authorization {
     fn validate_policy(
         &self,
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
         pubkey: &PublicKey,
         request: &Request,
@@ -436,14 +436,14 @@ mod tests {
     use nostr::nips::nip46::Request;
     use nostr_sdk::{Keys, PublicKey};
     // Helper function to create a test database connection
-    async fn setup_test_db() -> SqlitePool {
-        SqlitePool::connect("sqlite::memory:").await.unwrap()
+    async fn setup_test_db() -> PgPool {
+        PgPool::connect("sqlite::memory:").await.unwrap()
     }
 
     // Helper function to create a test authorization
     async fn create_test_authorization(
-        pool: &SqlitePool,
-        max_uses: Option<u16>,
+        pool: &PgPool,
+        max_uses: Option<i16>,
         expires_at: Option<DateTime<Utc>>,
     ) -> Authorization {
         // Create policies table

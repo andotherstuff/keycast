@@ -7,7 +7,7 @@ use axum::{
     http::{request::Parts, StatusCode},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -149,13 +149,13 @@ where
 
 /// Get tenant by domain from database
 pub async fn get_tenant_by_domain(
-    pool: &SqlitePool,
+    pool: &PgPool,
     domain: &str,
 ) -> Result<Tenant, sqlx::Error> {
     sqlx::query_as::<_, Tenant>(
         "SELECT id, domain, name, settings, created_at, updated_at
          FROM tenants
-         WHERE domain = ?",
+         WHERE domain = $1",
     )
     .bind(domain)
     .fetch_one(pool)
@@ -164,13 +164,13 @@ pub async fn get_tenant_by_domain(
 
 /// Get tenant by ID from database
 pub async fn get_tenant_by_id(
-    pool: &SqlitePool,
+    pool: &PgPool,
     tenant_id: i64,
 ) -> Result<Tenant, sqlx::Error> {
     sqlx::query_as::<_, Tenant>(
         "SELECT id, domain, name, settings, created_at, updated_at
          FROM tenants
-         WHERE id = ?",
+         WHERE id = $1",
     )
     .bind(tenant_id)
     .fetch_one(pool)
@@ -179,14 +179,14 @@ pub async fn get_tenant_by_id(
 
 /// Create a new tenant
 pub async fn create_tenant(
-    pool: &SqlitePool,
+    pool: &PgPool,
     domain: &str,
     name: &str,
     settings: Option<&str>,
 ) -> Result<Tenant, sqlx::Error> {
     sqlx::query_as::<_, Tenant>(
         "INSERT INTO tenants (domain, name, settings, created_at, updated_at)
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         VALUES ($1, $2, $3, NOW(), NOW())
          RETURNING id, domain, name, settings, created_at, updated_at",
     )
     .bind(domain)
@@ -197,7 +197,7 @@ pub async fn create_tenant(
 }
 
 /// List all tenants
-pub async fn list_tenants(pool: &SqlitePool) -> Result<Vec<Tenant>, sqlx::Error> {
+pub async fn list_tenants(pool: &PgPool) -> Result<Vec<Tenant>, sqlx::Error> {
     sqlx::query_as::<_, Tenant>(
         "SELECT id, domain, name, settings, created_at, updated_at
          FROM tenants
@@ -306,7 +306,7 @@ fn generate_tenant_name(domain: &str) -> String {
 /// - Domain validation prevents obviously malicious inputs
 /// - Auto-provisioned tenants use restrictive defaults
 pub async fn get_or_create_tenant(
-    pool: &SqlitePool,
+    pool: &PgPool,
     domain: &str,
 ) -> Result<Tenant, TenantError> {
     // 1. Validate domain format

@@ -7,17 +7,17 @@ use chrono::DateTime;
 use nostr::nips::nip46::Request;
 use nostr_sdk::PublicKey;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, PgPool};
 
 /// An OAuth authorization where the user's personal key serves as both bunker key and signing key
 #[derive(Debug, FromRow, Serialize, Deserialize, Clone)]
 pub struct OAuthAuthorization {
     /// The id of the authorization
-    pub id: u32,
+    pub id: i32,
     /// The user's public key (also used as bunker public key)
     pub user_public_key: String,
     /// The OAuth application id
-    pub application_id: u32,
+    pub application_id: i32,
     /// The bunker public key (same as user_public_key)
     pub bunker_public_key: String,
     /// The encrypted user private key (used for both NIP-46 decryption and event signing)
@@ -34,10 +34,10 @@ pub struct OAuthAuthorization {
 }
 
 impl OAuthAuthorization {
-    pub async fn find(pool: &SqlitePool, tenant_id: i64, id: u32) -> Result<Self, AuthorizationError> {
+    pub async fn find(pool: &PgPool, tenant_id: i64, id: i32) -> Result<Self, AuthorizationError> {
         let authorization = sqlx::query_as::<_, OAuthAuthorization>(
             r#"
-            SELECT * FROM oauth_authorizations WHERE tenant_id = ?1 AND id = ?2
+            SELECT * FROM oauth_authorizations WHERE tenant_id = $1 AND id = $2
             "#,
         )
         .bind(tenant_id)
@@ -47,8 +47,8 @@ impl OAuthAuthorization {
         Ok(authorization)
     }
 
-    pub async fn all_ids(pool: &SqlitePool) -> Result<Vec<u32>, AuthorizationError> {
-        let authorizations = sqlx::query_scalar::<_, u32>(
+    pub async fn all_ids(pool: &PgPool) -> Result<Vec<i32>, AuthorizationError> {
+        let authorizations = sqlx::query_scalar::<_, i32>(
             r#"
             SELECT id FROM oauth_authorizations
             "#,
@@ -58,8 +58,8 @@ impl OAuthAuthorization {
         Ok(authorizations)
     }
 
-    pub async fn all_ids_for_all_tenants(pool: &SqlitePool) -> Result<Vec<(i64, u32)>, AuthorizationError> {
-        let authorizations = sqlx::query_as::<_, (i64, u32)>(
+    pub async fn all_ids_for_all_tenants(pool: &PgPool) -> Result<Vec<(i64, i32)>, AuthorizationError> {
+        let authorizations = sqlx::query_as::<_, (i64, i32)>(
             r#"
             SELECT tenant_id, id FROM oauth_authorizations
             "#,
@@ -73,7 +73,7 @@ impl OAuthAuthorization {
 impl AuthorizationValidations for OAuthAuthorization {
     fn validate_policy(
         &self,
-        _pool: &SqlitePool,
+        _pool: &PgPool,
         _tenant_id: i64,
         _pubkey: &PublicKey,
         request: &Request,

@@ -21,7 +21,7 @@ pub enum PermissionError {
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct Permission {
     /// The id of the permission
-    pub id: u32,
+    pub id: i32,
     /// The identifier of the permission
     pub identifier: String,
     /// The configuration of the permission
@@ -48,11 +48,11 @@ impl Permission {
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct PolicyPermission {
     /// The id of the policy permission
-    pub id: u32,
+    pub id: i32,
     /// The id of the policy
-    pub policy_id: u32,
+    pub policy_id: i32,
     /// The id of the permission
-    pub permission_id: u32,
+    pub permission_id: i32,
     /// The date and time the policy permission was created
     pub created_at: DateTime<chrono::Utc>,
     /// The date and time the policy permission was last updated

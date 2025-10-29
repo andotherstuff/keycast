@@ -3,14 +3,14 @@ use crate::types::permission::{Permission, PermissionError};
 use async_trait::async_trait;
 use nostr::nips::nip46::Request;
 use nostr_sdk::{PublicKey, UnsignedEvent};
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 
 /// Provides methods for validating an authorization against it's permissions and other properties in the context of a request
 pub trait AuthorizationValidations {
     /// Check the authorization's policy & permissions
     fn validate_policy(
         &self,
-        pool: &SqlitePool,
+        pool: &PgPool,
         tenant_id: i64,
         pubkey: &PublicKey,
         request: &Request,

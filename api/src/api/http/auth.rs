@@ -14,7 +14,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use nostr_sdk::{Keys, UnsignedEvent, PublicKey, ToBech32};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::env;
 use keycast_core::types::permission::Permission;
 use keycast_core::traits::CustomPermission;
@@ -288,7 +288,7 @@ pub async fn register(
     tracing::info!("Registering new user with email: {} for tenant: {}", req.email, tenant_id);
 
     // Check if email already exists in this tenant
-    let existing: Option<(String,)> = sqlx::query_as("SELECT public_key FROM users WHERE email = ?1 AND tenant_id = ?2")
+    let existing: Option<(String,)> = sqlx::query_as("SELECT public_key FROM users WHERE email = $1 AND tenant_id = $2")
         .bind(&req.email)
         .bind(tenant_id)
         .fetch_optional(pool)
@@ -322,7 +322,7 @@ pub async fn register(
     // Check if this public key is already registered in this tenant (for BYOK case)
     if req.nsec.is_some() {
         let existing_pubkey: Option<(String,)> = sqlx::query_as(
-            "SELECT public_key FROM users WHERE public_key = ?1 AND tenant_id = ?2"
+            "SELECT public_key FROM users WHERE public_key = $1 AND tenant_id = $2"
         )
         .bind(public_key.to_hex())
         .bind(tenant_id)
@@ -353,7 +353,7 @@ pub async fn register(
     // Insert user with email verification token
     sqlx::query(
         "INSERT INTO users (public_key, tenant_id, email, password_hash, email_verified, email_verification_token, email_verification_expires_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
     )
     .bind(public_key.to_hex())
     .bind(tenant_id)
@@ -370,7 +370,7 @@ pub async fn register(
     // Insert personal key
     sqlx::query(
         "INSERT INTO personal_keys (user_public_key, encrypted_secret_key, bunker_secret, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)"
+         VALUES ($1, $2, $3, $4, $5)"
     )
     .bind(public_key.to_hex())
     .bind(&encrypted_secret)
@@ -382,8 +382,9 @@ pub async fn register(
 
     // Create default OAuth application if it doesn't exist
     sqlx::query(
-        "INSERT OR IGNORE INTO oauth_applications (name, client_id, client_secret, redirect_uris, created_at, updated_at)
-         VALUES ('keycast-login', 'keycast-login', 'auto-approved', '[]', ?1, ?2)"
+        "INSERT INTO oauth_applications (name, client_id, client_secret, redirect_uris, created_at, updated_at)
+         VALUES ('keycast-login', 'keycast-login', 'auto-approved', '[]', $1, $2)
+         ON CONFLICT (client_id, tenant_id) DO NOTHING"
     )
     .bind(Utc::now())
     .bind(Utc::now())
@@ -392,7 +393,7 @@ pub async fn register(
 
     // Get the application ID and policy_id
     let app_data: (i64, Option<i64>) = sqlx::query_as(
-        "SELECT id, policy_id FROM oauth_applications WHERE client_id = 'keycast-login' AND tenant_id = ?1"
+        "SELECT id, policy_id FROM oauth_applications WHERE client_id = 'keycast-login' AND tenant_id = $1"
     )
     .bind(tenant_id)
     .fetch_one(&mut *tx)
@@ -406,7 +407,7 @@ pub async fn register(
     } else {
         // Get default policy for this tenant
         sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM policies WHERE name = 'Standard Social (Default)' AND tenant_id = ?1 LIMIT 1"
+            "SELECT id FROM policies WHERE name = 'Standard Social (Default)' AND tenant_id = $1 LIMIT 1"
         )
         .bind(tenant_id)
         .fetch_one(&mut *tx)
@@ -435,7 +436,7 @@ pub async fn register(
     sqlx::query(
         "INSERT INTO oauth_authorizations
          (tenant_id, user_public_key, application_id, bunker_public_key, bunker_secret, secret, relays, policy_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
     )
     .bind(tenant_id)
     .bind(public_key.to_hex())
@@ -517,7 +518,7 @@ pub async fn login(
 
     // Fetch user with password hash from this tenant
     let user: (String, String) = sqlx::query_as(
-        "SELECT public_key, password_hash FROM users WHERE email = ?1 AND tenant_id = ?2 AND password_hash IS NOT NULL"
+        "SELECT public_key, password_hash FROM users WHERE email = $1 AND tenant_id = $2 AND password_hash IS NOT NULL"
     )
     .bind(&req.email)
     .bind(tenant_id)
@@ -559,7 +560,7 @@ pub async fn login(
 /// Get bunker URL for the authenticated user
 pub async fn get_bunker_url(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<Json<BunkerUrlResponse>, AuthError> {
     // Extract user pubkey from JWT token
@@ -571,8 +572,8 @@ pub async fn get_bunker_url(
     let result: Option<(String, String)> = sqlx::query_as(
         "SELECT oa.bunker_public_key, oa.secret FROM oauth_authorizations oa
          JOIN users u ON oa.user_public_key = u.public_key
-         WHERE oa.user_public_key = ?1
-         AND u.tenant_id = ?2
+         WHERE oa.user_public_key = $1
+         AND u.tenant_id = $2
          AND oa.application_id = (SELECT id FROM oauth_applications WHERE client_id = 'keycast-login')
          ORDER BY oa.created_at DESC LIMIT 1"
     )
@@ -598,7 +599,7 @@ pub async fn get_bunker_url(
 /// Verify email address with token
 pub async fn verify_email(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     Json(req): Json<VerifyEmailRequest>,
 ) -> Result<Json<VerifyEmailResponse>, AuthError> {
     let tenant_id = tenant.0.id;
@@ -652,7 +653,7 @@ pub async fn verify_email(
 /// Request password reset email
 pub async fn forgot_password(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> Result<Json<ForgotPasswordResponse>, AuthError> {
     let tenant_id = tenant.0.id;
@@ -720,7 +721,7 @@ pub async fn forgot_password(
 /// Reset password with token
 pub async fn reset_password(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     Json(req): Json<ResetPasswordRequest>,
 ) -> Result<Json<ResetPasswordResponse>, AuthError> {
     let tenant_id = tenant.0.id;
@@ -777,7 +778,7 @@ pub async fn reset_password(
 /// Get username for NIP-05 - the only profile data we store server-side
 pub async fn get_profile(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileData>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
@@ -813,7 +814,7 @@ pub async fn get_profile(
 /// Client should publish kind 0 profile events to relays via bunker URL
 pub async fn update_profile(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
     Json(profile): Json<ProfileData>,
 ) -> Result<Json<serde_json::Value>, AuthError> {
@@ -884,7 +885,7 @@ pub struct BunkerSessionsResponse {
 /// List all active bunker sessions for the authenticated user
 pub async fn list_sessions(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<Json<BunkerSessionsResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
@@ -948,7 +949,7 @@ pub struct SessionActivityResponse {
 /// Get activity log for a specific bunker session
 pub async fn get_session_activity(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
     axum::extract::Path(secret): axum::extract::Path<String>,
 ) -> Result<Json<SessionActivityResponse>, AuthError> {
@@ -1010,7 +1011,7 @@ pub struct RevokeSessionResponse {
 /// Revoke a bunker session
 pub async fn revoke_session(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
     Json(req): Json<RevokeSessionRequest>,
 ) -> Result<Json<RevokeSessionResponse>, AuthError> {
@@ -1051,7 +1052,7 @@ pub struct PermissionDetail {
     pub application_id: i64,
     pub policy_name: String,
     pub policy_id: i64,
-    pub allowed_event_kinds: Vec<u16>,
+    pub allowed_event_kinds: Vec<i16>,
     pub event_kind_names: Vec<String>,
     pub created_at: String,
     pub last_activity: Option<String>,
@@ -1067,7 +1068,7 @@ pub struct PermissionsResponse {
 /// Get detailed permissions for all active authorizations
 pub async fn list_permissions(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<Json<PermissionsResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
@@ -1103,7 +1104,7 @@ pub async fn list_permissions(
 
     for (app_id, app_name, policy_id, policy_name, created_at, secret, last_activity, activity_count) in auth_data {
         // Get allowed event kinds from policy permissions
-        let event_kinds: Vec<u16> = if policy_id > 0 {
+        let event_kinds: Vec<i16> = if policy_id > 0 {
             let permissions_data: Vec<(String,)> = sqlx::query_as(
                 "SELECT p.config FROM permissions p
                  JOIN policy_permissions pp ON p.id = pp.permission_id
@@ -1118,7 +1119,7 @@ pub async fn list_permissions(
                     if let Some(kinds_array) = config.get("allowed_kinds").and_then(|v| v.as_array()) {
                         kinds_array
                             .iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u16))
+                            .filter_map(|v| v.as_u64().map(|n| n as i16))
                             .collect()
                     } else {
                         Vec::new()
@@ -1152,7 +1153,7 @@ pub async fn list_permissions(
                 9735 => "Zap Receipt (kind 9735)".to_string(),
                 23194 | 23195 => "Wallet Operation (kind 23194-23195)".to_string(),
                 _ if kind >= 10000 && kind < 20000 => format!("List/Data (kind {})", kind),
-                _ if kind >= 30000 && kind < 40000 => format!("Long-form (kind {})", kind),
+                _ if kind >= 30000 => format!("Long-form (kind {})", kind),
                 _ => format!("Kind {}", kind),
             })
             .collect();
@@ -1187,7 +1188,7 @@ pub struct SignEventResponse {
 /// Validate that the user has permission to sign this event
 /// Returns the policy_id if successful, or an error if unauthorized
 async fn validate_signing_permissions(
-    pool: &SqlitePool,
+    pool: &PgPool,
     tenant_id: i64,
     user_pubkey: &str,
     event: &UnsignedEvent,
@@ -1370,7 +1371,7 @@ pub async fn sign_event(
 /// Get user's public key in both hex and npub formats
 pub async fn get_pubkey(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<Json<PubkeyResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
@@ -1449,7 +1450,7 @@ const KEY_EXPORT_CODE_EXPIRY_MINUTES: i64 = 10;
 /// Verify user's password before allowing key export
 pub async fn verify_password_for_export(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
     Json(req): Json<VerifyPasswordRequest>,
 ) -> Result<Json<VerifyPasswordResponse>, AuthError> {
@@ -1481,7 +1482,7 @@ pub async fn verify_password_for_export(
 /// Request key export - sends verification code via email
 pub async fn request_key_export(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<Json<RequestKeyExportResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
@@ -1528,7 +1529,7 @@ pub async fn request_key_export(
 /// Verify export code and return export token
 pub async fn verify_export_code(
     tenant: crate::api::tenant::TenantExtractor,
-    State(pool): State<SqlitePool>,
+    State(pool): State<PgPool>,
     headers: HeaderMap,
     Json(req): Json<VerifyExportCodeRequest>,
 ) -> Result<Json<VerifyExportCodeResponse>, AuthError> {
@@ -1703,11 +1704,11 @@ mod tests {
     use keycast_core::encryption::KeyManager;
     use keycast_core::signing_handler::SigningHandler;
     use nostr_sdk::{Keys, UnsignedEvent, Kind, Timestamp};
-    use sqlx::SqlitePool;
+    use sqlx::PgPool;
 
     /// Helper to create in-memory test database with schema
-    async fn create_test_db() -> SqlitePool {
-        let pool = SqlitePool::connect(":memory:").await.unwrap();
+    async fn create_test_db() -> PgPool {
+        let pool = PgPool::connect(":memory:").await.unwrap();
 
         sqlx::query(
             r#"
