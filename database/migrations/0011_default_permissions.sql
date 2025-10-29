@@ -158,7 +158,8 @@ VALUES (
     'Read Only',
     NULL,
     NOW(),
-    NOW()
+    NOW(),
+    1  -- Default tenant
 )
 ON CONFLICT DO NOTHING;
 
@@ -186,7 +187,8 @@ VALUES (
     'Wallet Only',
     NULL,
     NOW(),
-    NOW()
+    NOW(),
+    1  -- Default tenant
 )
 ON CONFLICT DO NOTHING;
 
