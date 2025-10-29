@@ -12,117 +12,108 @@ CREATE INDEX IF NOT EXISTS idx_oauth_applications_policy_id ON oauth_application
 -- Permission 1: Social Events Only (kinds 0, 1, 3, 7, 9735)
 -- Allows: Profile, Notes, Follows, Reactions, Zap receipts
 -- Safe for basic social clients
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_social',
     '{"allowed_kinds": [0, 1, 3, 7, 9735]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 2: Messaging (kinds 4, 44, 1059)
 -- Allows: Encrypted DMs (NIP-04, NIP-44), Gift wraps
 -- Sensitive: gives access to private messages
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_messaging',
     '{"allowed_kinds": [4, 44, 1059]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 3: Zaps Only (kind 9734)
 -- Allows: Zap requests (spending money!)
 -- Financial: should require explicit approval
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_zaps',
     '{"allowed_kinds": [9734]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 4: Lists & Data (kinds 10000-19999)
 -- Allows: Mute lists, pin lists, bookmarks, etc.
 -- Generally safe, user-specific data
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_lists',
     '{"allowed_kinds": [10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10015, 10030]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 5: Long-form Content (kinds 30000-39999)
 -- Allows: Long-form articles, blogs, etc.
 -- Generally safe for content creation
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_longform',
     '{"allowed_kinds": [30023, 30024, 30030, 30040, 30041, 30078, 30311, 30315, 30402, 30403]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 6: Wallet Operations (kinds 23194, 23195)
 -- Allows: Wallet connect, wallet operations
 -- DANGEROUS: direct wallet access
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_wallet',
     '{"allowed_kinds": [23194, 23195]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 7: Deletion Events (kind 5)
 -- Allows: Deleting events
 -- DANGEROUS: can delete all user content
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_deletion',
     '{"allowed_kinds": [5]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 8: Reports (kind 1984)
 -- Allows: Filing reports/complaints
 -- Sensitive: can be abused for harassment
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_reports',
     '{"allowed_kinds": [1984]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
 -- Permission 9: All Social + Messaging (common safe bundle)
 -- Combines social events + messaging for convenience
 -- Does NOT include financial, deletion, or dangerous operations
-INSERT INTO permissions (identifier, config, created_at, updated_at, tenant_id)
+INSERT INTO permissions (identifier, config, created_at, updated_at)
 VALUES (
     'allowed_kinds_social_messaging',
     '{"allowed_kinds": [0, 1, 3, 4, 7, 44, 1059, 9735]}',
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
@@ -168,8 +159,7 @@ VALUES (
     'Read Only',
     NULL,
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
@@ -198,8 +188,7 @@ VALUES (
     'Wallet Only',
     NULL,
     NOW(),
-    NOW(),
-    1
+    NOW()
 )
 ON CONFLICT DO NOTHING;
 
