@@ -83,11 +83,14 @@ DROP INDEX IF EXISTS authorizations_secret_idx;
 CREATE UNIQUE INDEX idx_authorizations_secret_tenant ON authorizations(tenant_id, secret);
 
 -- Personal keys: bunker_secret unique per tenant
+-- Drop the UNIQUE constraint (not just the index)
+ALTER TABLE personal_keys DROP CONSTRAINT IF EXISTS personal_keys_bunker_secret_key;
 DROP INDEX IF EXISTS idx_personal_keys_bunker_secret;
-DROP INDEX IF EXISTS personal_keys_bunker_secret_key;
 CREATE UNIQUE INDEX idx_personal_keys_bunker_secret_tenant ON personal_keys(tenant_id, bunker_secret);
 
 -- OAuth authorizations: bunker_public_key unique per tenant
+-- Drop the UNIQUE constraint if it still exists (migration 0005 should have removed it)
+ALTER TABLE oauth_authorizations DROP CONSTRAINT IF EXISTS oauth_authorizations_bunker_public_key_key;
 DROP INDEX IF EXISTS oauth_authorizations_bunker_public_key_key;
 CREATE UNIQUE INDEX idx_oauth_authorizations_bunker_public_key_tenant ON oauth_authorizations(tenant_id, bunker_public_key);
 
