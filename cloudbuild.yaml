@@ -18,13 +18,13 @@ steps:
       - 'push'
       - 'us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
 
-  # Deploy API to Cloud Run
+  # Deploy Unified Service to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
       - 'deploy'
-      - 'keycast-oauth'
+      - 'keycast-unified'
       - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
       - '--region=us-central1'
       - '--platform=managed'
@@ -33,10 +33,10 @@ steps:
       - '--memory=2Gi'
       - '--cpu=2'
       - '--timeout=300'
-      - '--args=api'
+      - '--args=unified'
       - '--no-cpu-throttling'
       - '--set-env-vars'
-      - 'NODE_ENV=production,RUST_LOG=info,WEB_BUILD_DIR=/app/web,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID},CORS_ALLOWED_ORIGIN=https://oauth.divine.video,APP_URL=https://oauth.divine.video,FROM_EMAIL=noreply@oauth.divine.video'
+      - 'NODE_ENV=production,RUST_LOG=info,WEB_BUILD_DIR=/app/web,USE_GCP_KMS=true,GCP_PROJECT_ID=${PROJECT_ID},CORS_ALLOWED_ORIGIN=https://oauth.divine.video,APP_URL=https://oauth.divine.video,FROM_EMAIL=noreply@divine.video'
       - '--update-secrets'
       - 'MASTER_KEY_PATH=keycast-master-key:latest,SENDGRID_API_KEY=keycast-sendgrid-api-key:latest,JWT_SECRET=keycast-jwt-secret:latest'
 
