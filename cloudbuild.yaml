@@ -24,7 +24,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'keycast-oauth'
+      - 'keycast-unified'
       - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/docker/keycast:latest'
       - '--region=us-central1'
       - '--platform=managed'
