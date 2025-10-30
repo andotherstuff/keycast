@@ -127,13 +127,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_credentials(false);
 
     let api_routes = keycast_api::api::http::routes::routes(database.pool.clone(), api_state.clone());
+
+    // Configure ServeDir to serve index.html for directories (SPA fallback)
+    let serve_web = ServeDir::new(&web_build_dir).append_index_html_on_directories(true);
+    let serve_examples = ServeDir::new(&examples_path).append_index_html_on_directories(true);
+
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/healthz/startup", get(health_check))
         .route("/healthz/ready", get(health_check))
         .nest("/api", api_routes)
-        .nest_service("/examples", ServeDir::new(examples_path))
-        .nest_service("/", ServeDir::new(web_build_dir))
+        .nest_service("/examples", serve_examples)
+        .fallback_service(serve_web)
         .layer(cors);
 
     let api_addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
