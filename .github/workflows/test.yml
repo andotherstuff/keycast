@@ -15,7 +15,21 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keycast_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
     - uses: actions/checkout@v4
     
@@ -23,13 +37,23 @@ jobs:
       uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         components: clippy, rustfmt
-    
+
     - name: Setup test environment
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/keycast_test
+        PGPASSWORD: postgres
       run: |
-        chmod +x scripts/setup-test-env.sh
-        ./scripts/setup-test-env.sh
-    
+        # Generate master key
+        chmod +x scripts/generate_key.sh
+        ./scripts/generate_key.sh
+
+        # Run migrations
+        cargo install sqlx-cli --no-default-features --features postgres
+        sqlx migrate run --database-url $DATABASE_URL --source database/migrations
+
     - name: Run tests
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/keycast_test
       run: cargo test --workspace --verbose
     
     - name: Run clippy
@@ -45,7 +69,21 @@ jobs:
   test-gcp:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keycast_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
     - uses: actions/checkout@v4
     
@@ -58,14 +96,23 @@ jobs:
         project_id: openvine-co
         service_account_key: ${{ secrets.GCP_SA_KEY }}
         export_default_credentials: true
-    
+
     - name: Setup test environment
+      env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/keycast_test
+        PGPASSWORD: postgres
       run: |
-        chmod +x scripts/setup-test-env.sh
-        ./scripts/setup-test-env.sh
-    
+        # Generate master key (will use GCP KMS)
+        chmod +x scripts/generate_key.sh
+        ./scripts/generate_key.sh
+
+        # Run migrations
+        cargo install sqlx-cli --no-default-features --features postgres
+        sqlx migrate run --database-url $DATABASE_URL --source database/migrations
+
     - name: Run GCP KMS tests
       env:
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/keycast_test
         USE_GCP_KMS: true
         GCP_PROJECT_ID: openvine-co
         GCP_KMS_LOCATION: global
