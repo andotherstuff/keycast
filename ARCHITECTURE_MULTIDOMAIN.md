@@ -239,7 +239,7 @@ CREATE TABLE oauth_authorizations (
 ```yaml
 CORS_ALLOWED_ORIGIN: https://oauth.divine.video
 APP_URL: https://oauth.divine.video
-FROM_EMAIL: noreply@oauth.divine.video
+FROM_EMAIL: noreply@divine.video
 ```
 
 ### NIP-05 Discovery
@@ -409,7 +409,7 @@ Enables user to see which apps signed which events and when.
 ### Current Customization Points
 
 1. **Email Sender**
-   - From: `FROM_EMAIL` env var (currently `noreply@oauth.divine.video`)
+   - From: `FROM_EMAIL` env var (currently `noreply@divine.video`)
    - Service: SendGrid via API key
 
 2. **HTML Pages** (in `/public`)

@@ -31,8 +31,8 @@ spec:
         - name: keycast-api
           image: us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest  # Will be replaced by deploy script
           ports:
-            - containerPort: 8080
-          # Note: Container must bind to $PORT (Cloud Run sets it)
+            - containerPort: 3000
+          # Note: Cloud Run sets $PORT env var automatically
           env:
             - name: DATABASE_PATH
               value: "/data/keycast.db"
@@ -51,7 +51,7 @@ spec:
             - name: APP_URL
               value: "https://oauth.divine.video"
             - name: FROM_EMAIL
-              value: "noreply@oauth.divine.video"
+              value: "noreply@divine.video"
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -76,8 +76,8 @@ spec:
               memory: "2Gi"
           startupProbe:
             httpGet:
-              path: /healthz/startup
-              port: 8080
+              path: /health
+              port: 3000
             failureThreshold: 30  # 30 retries * 3s = 90s for DB restore + startup
             periodSeconds: 3
             timeoutSeconds: 2

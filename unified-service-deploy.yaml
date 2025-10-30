@@ -1,7 +1,7 @@
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
-  name: keycast-oauth
+  name: keycast-unified
   annotations:
     run.googleapis.com/ingress: all
     run.googleapis.com/launch-stage: GA
@@ -16,7 +16,7 @@ spec:
     spec:
       containerConcurrency: 80
       timeoutSeconds: 300
-      serviceAccountName: PROJECT_ID@appspot.gserviceaccount.com  # Will be replaced by deploy script
+      serviceAccountName: openvine-co@appspot.gserviceaccount.com  # Will be replaced by deploy script
       volumes:
         - name: database
           emptyDir:
@@ -28,11 +28,12 @@ spec:
               - key: latest
                 path: litestream.yml
       containers:
-        - name: keycast-api
-          image: IMAGE_URL  # Will be replaced by deploy script
+        - name: keycast-unified
+          image: us-central1-docker.pkg.dev/openvine-co/docker/keycast:latest  # Will be replaced by deploy script
           ports:
             - containerPort: 3000
-          # Note: Cloud Run sets $PORT env var automatically
+          # Runs both API and Signer in same container
+          args: ["unified"]
           env:
             - name: DATABASE_PATH
               value: "/data/keycast.db"

@@ -1017,9 +1017,9 @@ mod tests {
         );
         let signer = UnifiedSigner::new(pool, key_manager).await.unwrap();
 
-        // Act
-        let handlers1 = signer.handlers();
-        let handlers2 = signer.handlers();
+        // Act - access handlers field directly
+        let handlers1 = Arc::clone(&signer.handlers);
+        let handlers2 = Arc::clone(&signer.handlers);
 
         // Assert - both should point to same underlying HashMap
         assert_eq!(

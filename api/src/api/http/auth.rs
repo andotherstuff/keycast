@@ -1534,7 +1534,7 @@ pub async fn verify_export_code(
     Json(req): Json<VerifyExportCodeRequest>,
 ) -> Result<Json<VerifyExportCodeResponse>, AuthError> {
     let user_pubkey = extract_user_from_token(&headers)?;
-    let tenant_id = tenant.0.id;
+    let _tenant_id = tenant.0.id;
 
     // Verify code and check expiration
     let result: Option<(String, chrono::DateTime<Utc>)> = sqlx::query_as(
@@ -1708,7 +1708,7 @@ mod tests {
 
     /// Helper to create in-memory test database with schema
     async fn create_test_db() -> PgPool {
-        let pool = PgPool::connect(":memory:").await.unwrap();
+        let pool = PgPool::connect("sqlite::memory:").await.unwrap();
 
         sqlx::query(
             r#"

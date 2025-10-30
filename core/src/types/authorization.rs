@@ -578,7 +578,7 @@ mod tests {
 
         // Test authorization with no redemptions
         let auth = create_test_authorization(&pool, Some(2), None).await;
-        assert!(!auth.fully_redeemed(&pool).unwrap());
+        assert!(!auth.fully_redeemed(&pool, 1).unwrap());
 
         // Add some redemptions
         sqlx::query(
@@ -594,7 +594,7 @@ mod tests {
         .unwrap();
 
         // Test partially redeemed
-        assert!(!auth.fully_redeemed(&pool).unwrap());
+        assert!(!auth.fully_redeemed(&pool, 1).unwrap());
 
         // Add another redemption to reach max
         sqlx::query(
@@ -610,11 +610,11 @@ mod tests {
         .unwrap();
 
         // Test fully redeemed
-        assert!(auth.fully_redeemed(&pool).unwrap());
+        assert!(auth.fully_redeemed(&pool, 1).unwrap());
 
         // Test unlimited uses
         let auth = create_test_authorization(&pool, None, None).await;
-        assert!(!auth.fully_redeemed(&pool).unwrap());
+        assert!(!auth.fully_redeemed(&pool, 1).unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -672,6 +672,6 @@ mod tests {
         };
 
         // This should return true as per current implementation
-        assert!(auth.validate_policy(&pool, &pubkey, &request).unwrap());
+        assert!(auth.validate_policy(&pool, 1, &pubkey, &request).unwrap());
     }
 }

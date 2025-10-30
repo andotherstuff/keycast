@@ -61,7 +61,7 @@ where
         let mut query = sqlx::query_as::<_, T>(&sql_with_tenant);
 
         // Bind user parameters first
-        for binding in self.bindings {
+        for _binding in self.bindings {
             // Note: sqlx doesn't allow dynamic binding like this
             // This is a simplified example - real implementation would use macros
             // For now, callers should manually add tenant_id to queries

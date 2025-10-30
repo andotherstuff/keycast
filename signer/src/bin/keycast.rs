@@ -88,17 +88,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<u16>()
         .unwrap_or(3000);
 
-    // Build API router with health check
+    // Build API router with health check and static file serving
     use axum::{Router, routing::get, http::StatusCode, response::IntoResponse};
+    use tower_http::services::ServeDir;
+    use tower_http::cors::{Any, CorsLayer};
 
     async fn health_check() -> impl IntoResponse {
         StatusCode::OK
     }
 
+    // Set up static file directories
+    let root_dir = env!("CARGO_MANIFEST_DIR");
+
+    // Use WEB_BUILD_DIR if set, otherwise use web/build for dev
+    let web_build_dir = env::var("WEB_BUILD_DIR")
+        .unwrap_or_else(|_| {
+            PathBuf::from(root_dir)
+                .parent()
+                .unwrap()
+                .join("web/build")
+                .to_string_lossy()
+                .to_string()
+        });
+
+    let examples_path = PathBuf::from(root_dir)
+        .parent()
+        .unwrap()
+        .join("examples");
+
+    tracing::info!("✔︎ Serving web frontend from: {}", web_build_dir);
+    tracing::info!("✔︎ Serving examples from: {:?}", examples_path);
+
+    // CORS configuration
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .allow_credentials(false);
+
     let api_routes = keycast_api::api::http::routes::routes(database.pool.clone(), api_state.clone());
     let app = Router::new()
         .route("/health", get(health_check))
-        .merge(api_routes);
+        .route("/healthz/startup", get(health_check))
+        .route("/healthz/ready", get(health_check))
+        .nest("/api", api_routes)
+        .nest_service("/examples", ServeDir::new(examples_path))
+        .nest_service("/", ServeDir::new(web_build_dir))
+        .layer(cors);
 
     let api_addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
     tracing::info!("✔︎ API server ready on {}", api_addr);

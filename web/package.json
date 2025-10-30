@@ -30,6 +30,7 @@
 		"@tailwindcss/typography": "^0.5.16",
 		"nostr-login": "^1.7.10",
 		"phosphor-svelte": "^3.0.1",
+		"swagger-ui-dist": "^5.29.5",
 		"tippy.js": "^6.3.7"
 	}
 }
