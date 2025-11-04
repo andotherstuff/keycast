@@ -82,10 +82,6 @@ pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
         state,
     };
 
-    // Landing page
-    let root_route = Router::new()
-        .route("/", get(landing_page));
-
     // Public auth routes (no authentication required)
     // Register and login need AuthState, email verification needs PgPool
     let register_login_routes = Router::new()
@@ -180,7 +176,6 @@ pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
 
     // Combine routes
     Router::new()
-        .merge(root_route)
         .merge(register_login_routes)
         .merge(email_routes)
         .merge(oauth_routes)
