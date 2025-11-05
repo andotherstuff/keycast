@@ -128,9 +128,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_routes = keycast_api::api::http::routes::routes(database.pool.clone(), api_state.clone());
 
-    // Configure ServeDir to serve index.html for directories (SPA fallback)
-    let serve_web = ServeDir::new(&web_build_dir).append_index_html_on_directories(true);
-    let serve_examples = ServeDir::new(&examples_path).append_index_html_on_directories(true);
+    // Set up static file directories
+    let public_path = PathBuf::from(root_dir)
+        .parent()
+        .unwrap()
+        .join("public");
+
+    // Serve public HTML files (landing, login, register, dashboard, profile)
+    let serve_examples = ServeDir::new(&examples_path);
+    let serve_public = ServeDir::new(&public_path);
 
     let app = Router::new()
         .route("/health", get(health_check))
@@ -138,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/healthz/ready", get(health_check))
         .nest("/api", api_routes)
         .nest_service("/examples", serve_examples)
-        .fallback_service(serve_web)
+        .fallback_service(serve_public)
         .layer(cors);
 
     let api_addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
