@@ -15,3 +15,10 @@ credentials.json
 
 # Git worktrees
 .worktrees/
+
+# Claude Code local files
+.claude/
+.specify/
+api/oauth-ui/
+specs/
+examples/auth-flows-demo/

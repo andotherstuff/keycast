@@ -18,64 +18,9 @@ pub struct AuthState {
     pub state: Arc<KeycastState>,
 }
 
-async fn landing_page() -> Html<&'static str> {
-    Html(r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Keycast OAuth Server</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-               max-width: 800px; margin: 50px auto; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
-        h1 { color: #bb86fc; }
-        h2 { color: #03dac6; margin-top: 30px; }
-        a { color: #03dac6; }
-        code { background: #2a2a2a; padding: 2px 6px; border-radius: 3px; }
-        .endpoint { background: #2a2a2a; padding: 10px; margin: 10px 0; border-radius: 5px; }
-        .method { color: #bb86fc; font-weight: bold; }
-    </style>
-</head>
-<body>
-    <h1>🔑 Keycast OAuth Server</h1>
-    <p>NIP-46 remote signing with OAuth 2.0 authorization</p>
-
-    <h2>Authentication Endpoints</h2>
-    <div class="endpoint">
-        <span class="method">POST</span> <code>/api/auth/register</code><br>
-        Register a new user with email/password
-    </div>
-    <div class="endpoint">
-        <span class="method">POST</span> <code>/api/auth/login</code><br>
-        Login and receive JWT token
-    </div>
-    <div class="endpoint">
-        <span class="method">GET</span> <code>/api/user/bunker</code><br>
-        Get personal NIP-46 bunker URL (requires auth)
-    </div>
-
-    <h2>OAuth 2.0 Endpoints</h2>
-    <div class="endpoint">
-        <span class="method">GET</span> <code>/api/oauth/authorize</code><br>
-        Authorization request (shows approval page)
-    </div>
-    <div class="endpoint">
-        <span class="method">POST</span> <code>/api/oauth/authorize</code><br>
-        User approves/denies authorization
-    </div>
-    <div class="endpoint">
-        <span class="method">POST</span> <code>/api/oauth/token</code><br>
-        Exchange authorization code for bunker URL
-    </div>
-
-    <h2>Test Clients</h2>
-    <p>Example OAuth clients available at <a href="http://localhost:8080">localhost:8080</a></p>
-</body>
-</html>
-    "#)
-}
-
-/// Build routes with explicit state - the proper way to structure an Axum app
-pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
+/// Build API routes - pure JSON endpoints, no HTML
+/// Returns unrooted Router that can be nested at any path (e.g., /api, /v1, etc.)
+pub fn api_routes(pool: PgPool, state: Arc<KeycastState>, auth_cors: tower_http::cors::CorsLayer, public_cors: tower_http::cors::CorsLayer) -> Router {
     tracing::debug!("Building routes");
 
     let auth_state = AuthState {
@@ -84,9 +29,11 @@ pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
 
     // Public auth routes (no authentication required)
     // Register and login need AuthState, email verification needs PgPool
+    // CORS restricted to trusted origins to prevent phishing
     let register_login_routes = Router::new()
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
+        .layer(auth_cors)
         .with_state(auth_state.clone());
 
     let email_routes = Router::new()
@@ -96,11 +43,13 @@ pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
         .with_state(pool.clone());
 
     // OAuth routes (no authentication required for initial authorize request)
+    // Public CORS - third parties can use OAuth flow (they never see passwords)
     let oauth_routes = Router::new()
         .route("/oauth/authorize", get(oauth::authorize_get))
         .route("/oauth/authorize", post(oauth::authorize_post))
         .route("/oauth/token", post(oauth::token))
         .route("/oauth/connect", post(oauth::connect_post))
+        .layer(public_cors.clone())
         .with_state(auth_state.clone());
 
     // nostr-login connect routes (wildcard path to capture nostrconnect:// URI)
@@ -175,19 +124,21 @@ pub fn routes(pool: PgPool, state: Arc<KeycastState>) -> Router {
         .with_state(pool);
 
     // Combine routes
+    // Auth routes already have restricted CORS applied
+    // Apply public CORS to everything else
     Router::new()
-        .merge(register_login_routes)
-        .merge(email_routes)
-        .merge(oauth_routes)
-        .merge(connect_routes)
-        .merge(signing_routes)
-        .merge(user_routes)
-        .merge(profile_update_routes)
-        .merge(key_export_routes)
-        .merge(key_export_final)
-        .merge(team_routes)
-        .merge(discovery_route)
-        .merge(docs_route)
+        .merge(register_login_routes)  // Has auth_cors
+        .merge(email_routes.layer(public_cors.clone()))
+        .merge(oauth_routes)  // Has public_cors
+        .merge(connect_routes.layer(public_cors.clone()))
+        .merge(signing_routes.layer(public_cors.clone()))
+        .merge(user_routes.layer(public_cors.clone()))
+        .merge(profile_update_routes.layer(public_cors.clone()))
+        .merge(key_export_routes.layer(public_cors.clone()))
+        .merge(key_export_final.layer(public_cors.clone()))
+        .merge(team_routes.layer(public_cors.clone()))
+        .merge(discovery_route.layer(public_cors.clone()))
+        .merge(docs_route.layer(public_cors))
 }
 
 /// Serve OpenAPI specification as JSON

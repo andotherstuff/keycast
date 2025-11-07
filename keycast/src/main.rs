@@ -1,6 +1,7 @@
 // ABOUTME: Unified binary that runs both API server and Signer daemon in one process
 // ABOUTME: Shares AuthorizationHandler state between HTTP endpoints and NIP-46 signer for optimal performance
 
+use axum::{routing::get, Router, http::StatusCode, response::{Html, IntoResponse}};
 use dotenv::dotenv;
 use keycast_core::database::Database;
 use keycast_core::encryption::file_key_manager::FileKeyManager;
@@ -10,16 +11,76 @@ use keycast_signer::UnifiedSigner;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+async fn landing_page() -> Html<&'static str> {
+    Html(r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Keycast - NIP-46 Remote Signing</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               max-width: 800px; margin: 50px auto; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+        h1 { color: #bb86fc; }
+        h2 { color: #03dac6; margin-top: 30px; }
+        a { color: #03dac6; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code { background: #2a2a2a; padding: 2px 6px; border-radius: 3px; }
+        .endpoint { background: #2a2a2a; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .method { color: #bb86fc; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🔑 Keycast</h1>
+    <p>NIP-46 remote signing with OAuth 2.0 authorization</p>
+
+    <h2>API Endpoints</h2>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/auth/register</code><br>
+        Register with email/password (ROPC)
+    </div>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/auth/login</code><br>
+        Login and get JWT token
+    </div>
+    <div class="endpoint">
+        <span class="method">GET</span> <code>/api/user/bunker</code><br>
+        Get NIP-46 bunker URL (requires auth)
+    </div>
+
+    <h2>OAuth 2.0</h2>
+    <div class="endpoint">
+        <span class="method">GET/POST</span> <code>/api/oauth/authorize</code><br>
+        Authorization flow
+    </div>
+    <div class="endpoint">
+        <span class="method">POST</span> <code>/api/oauth/token</code><br>
+        Exchange code for bunker URL
+    </div>
+
+    <p><a href="/examples">View examples</a></p>
+</body>
+</html>
+    "#)
+}
+
+async fn health_check() -> impl IntoResponse {
+    StatusCode::OK
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+
     println!("\n================================================");
     println!("🔑 Keycast Unified Service Starting...");
     println!("   Running API + Signer in single process");
     println!("================================================\n");
-
-    dotenv().ok();
 
     // Initialize tracing
     tracing_subscriber::registry()
@@ -88,14 +149,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<u16>()
         .unwrap_or(3000);
 
-    // Build API router with health check and static file serving
-    use axum::{Router, routing::get, http::StatusCode, response::IntoResponse};
-    use tower_http::services::ServeDir;
-    use tower_http::cors::{Any, CorsLayer};
-
-    async fn health_check() -> impl IntoResponse {
-        StatusCode::OK
-    }
 
     // Set up static file directories
     let root_dir = env!("CARGO_MANIFEST_DIR");
@@ -117,35 +170,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join("examples");
 
     tracing::info!("✔︎ Serving web frontend from: {}", web_build_dir);
-    tracing::info!("✔︎ Serving examples from: {:?}", examples_path);
 
     // CORS configuration
-    let cors = CorsLayer::new()
+    use tower_http::cors::AllowOrigin;
+
+    let allowed_origins = env::var("ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "https://peek.verse.app,http://localhost".to_string());
+
+    let auth_cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, _| {
+            let origin_str = origin.to_str().unwrap_or("");
+            if origin_str.starts_with("http://localhost:") || origin_str == "http://localhost" {
+                return true;
+            }
+            allowed_origins.split(',').map(|s| s.trim()).any(|allowed| origin_str == allowed)
+        }))
+        .allow_methods([axum::http::Method::POST, axum::http::Method::GET])
+        .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+        .allow_credentials(false);
+
+    let public_cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
         .allow_credentials(false);
 
-    let api_routes = keycast_api::api::http::routes::routes(database.pool.clone(), api_state.clone());
+    // Get pure API routes (JSON endpoints only)
+    let api_routes = keycast_api::api::http::routes::api_routes(database.pool.clone(), api_state.clone(), auth_cors, public_cors);
 
-    // Set up static file directories
-    let public_path = PathBuf::from(root_dir)
+    // Serve examples directory
+    let examples_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("public");
-
-    // Serve public HTML files (landing, login, register, dashboard, profile)
-    let serve_examples = ServeDir::new(&examples_path);
-    let serve_public = ServeDir::new(&public_path);
+        .join("examples");
 
     let app = Router::new()
+        // Root landing page
+        .route("/", get(landing_page))
+
+        // Health checks at root level (for k8s/Cloud Run)
         .route("/health", get(health_check))
         .route("/healthz/startup", get(health_check))
         .route("/healthz/ready", get(health_check))
+
+        // NIP-05 discovery at root level
+        .route("/.well-known/nostr.json", get(keycast_api::api::http::nostr_discovery_public))
+        .with_state(database.pool.clone())
+
+        // All API endpoints under /api prefix
         .nest("/api", api_routes)
-        .nest_service("/examples", serve_examples)
-        .fallback_service(serve_public)
-        .layer(cors);
+
+        // Test examples
+        .nest_service("/examples", ServeDir::new(&examples_path))
+
+        // SvelteKit frontend (fallback - catches all other routes)
+        .fallback_service(ServeDir::new(&web_build_dir));
 
     let api_addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
     tracing::info!("✔︎ API server ready on {}", api_addr);
