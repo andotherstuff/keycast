@@ -10,6 +10,7 @@ WORKDIR /app
 COPY ./api ./api
 COPY ./signer ./signer
 COPY ./core ./core
+COPY ./keycast ./keycast
 COPY ./Cargo.toml ./Cargo.toml
 COPY ./Cargo.lock ./Cargo.lock
 
@@ -79,9 +80,7 @@ RUN curl -fsSL https://bun.sh/install | bash
 # Create necessary directories
 RUN mkdir -p /app/database /data
 
-# Copy built artifacts
-COPY --from=rust-builder /app/target/release/keycast_api ./
-COPY --from=rust-builder /app/target/release/keycast_signer ./
+# Copy built artifacts - only keycast binary (unified)
 COPY --from=rust-builder /app/target/release/keycast ./
 COPY --from=web-builder /app/build ./web
 COPY --from=web-builder /app/package.json ./

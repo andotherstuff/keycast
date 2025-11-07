@@ -391,7 +391,7 @@ impl UnifiedSigner {
                 let auth_opt = sqlx::query_as::<_, OAuthAuthorization>(
                     r#"
                     SELECT * FROM oauth_authorizations
-                    WHERE bunker_public_key = ?
+                    WHERE bunker_public_key = $1
                     "#
                 )
                 .bind(bunker_pubkey)
@@ -795,17 +795,17 @@ impl AuthorizationHandler {
         // Insert signing activity
         sqlx::query(
             "INSERT INTO signing_activity
-             (tenant_id, user_public_key, application_id, bunker_secret, event_kind, event_content, event_id, client_public_key, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)"
+             (user_public_key, application_id, bunker_secret, event_kind, event_content, event_id, client_public_key, tenant_id, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())"
         )
-        .bind(self.tenant_id)
         .bind(&user_pubkey)
         .bind(application_id)
         .bind(&bunker_secret)
-        .bind(event_kind as i64)
+        .bind(event_kind as i32)
         .bind(&truncated_content)
         .bind(event_id)
         .bind(&client_pubkey)
+        .bind(self.tenant_id)
         .execute(&self.pool)
         .await?;
 
